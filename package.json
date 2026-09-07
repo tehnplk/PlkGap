@@ -1,0 +1,36 @@
+{
+  "name": "plkgap",
+  "version": "1.0.0",
+  "description": "Electron React Vite desktop app with embedded PostGIS",
+  "main": "out/main/index.js",
+  "scripts": {
+    "test": "tsx scripts/test-database.ts && node scripts/test-electron.mjs",
+    "dev": "node scripts/run-electron-vite.cjs dev",
+    "start": "node scripts/run-electron-vite.cjs preview",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-postgis": "^0.2.8",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.2.0",
+    "electron-vite": "^5.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6"
+  },
+  "private": true
+}
