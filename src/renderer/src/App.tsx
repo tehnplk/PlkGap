@@ -7,14 +7,15 @@ import { WelcomePage } from './pages/WelcomePage'
 import { DatabasePage } from './pages/DatabasePage'
 import { MapPage } from './pages/MapPage'
 import { AboutPage } from './pages/AboutPage'
+import { TablePage } from './pages/TablePage'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
-type Kind = 'welcome' | 'database' | 'map' | 'about'
+type Kind = 'welcome' | 'database' | 'map' | 'table' | 'about'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
 type Item = { label: string; action: () => void; disabled?: boolean; hint?: string }
-const titles: Record<Kind, string> = { welcome: 'Welcome', database: 'Database', map: 'Map', about: 'About PlkGap' }
-const icons: Record<Kind, IconName> = { welcome: 'home', database: 'database', map: 'map', about: 'info' }
+const titles: Record<Kind, string> = { welcome: 'Welcome', database: 'Database', map: 'Map', table: 'Sample Data', about: 'About PlkGap' }
+const icons: Record<Kind, IconName> = { welcome: 'home', database: 'database', map: 'map', table: 'table', about: 'info' }
 
 export function App() {
   const [status, setStatus] = useState<DatabaseStatus>()
@@ -56,8 +57,8 @@ export function App() {
   function open(id: Kind) {
     if (windows.some((item) => item.id === id)) { focus(id); return }
     const area = workspace.current!
-    const width = Math.min(id === 'about' ? 460 : 660, area.clientWidth - 32)
-    const height = Math.min(id === 'about' ? 310 : 450, area.clientHeight - 32)
+    const width = Math.min(id === 'about' ? 460 : id === 'table' ? 760 : 660, area.clientWidth - 32)
+    const height = Math.min(id === 'about' ? 310 : id === 'table' ? 480 : 450, area.clientHeight - 32)
     const offset = 28 + windows.length * 30
     setWindows((items) => [...items, { id, width, height, x: Math.max(0, Math.min(offset, area.clientWidth - width)), y: Math.max(0, Math.min(offset, area.clientHeight - height)), minimized: false, maximized: false }])
   }
@@ -95,7 +96,7 @@ export function App() {
   }
 
   const menus: Record<string, Item[]> = {
-    File: [{ label: 'Welcome', action: () => open('welcome') }, { label: 'Open database', action: () => open('database') }, { label: 'Open map', action: () => open('map') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
+    File: [{ label: 'Welcome', action: () => open('welcome') }, { label: 'Open database', action: () => open('database') }, { label: 'Open map', action: () => open('map') }, { label: 'Sample data', action: () => open('table') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
     View: [{ label: 'Status bar', action: () => setStatusbar(!statusbar), hint: statusbar ? 'On' : 'Off' }],
     Window: [{ label: 'Cascade windows', action: () => arrange('cascade'), disabled: !windows.length }, { label: 'Tile windows', action: () => arrange('tile'), disabled: !windows.length }, { label: 'Close all windows', action: () => setWindows([]), disabled: !windows.length }, ...windows.map((item) => ({ label: titles[item.id], action: () => focus(item.id), hint: item.minimized ? 'Minimized' : active?.id === item.id ? 'Active' : '' }))],
     Help: [{ label: 'About PlkGap', action: () => open('about') }],
@@ -137,6 +138,7 @@ export function App() {
           {item.id === 'welcome' && <WelcomePage onOpenDatabase={() => open('database')} />}
           {item.id === 'database' && <DatabasePage status={status} error={error} />}
           {item.id === 'map' && <MapPage />}
+          {item.id === 'table' && <TablePage />}
           {item.id === 'about' && <AboutPage />}
         </div>
         {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}

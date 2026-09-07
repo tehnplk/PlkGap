@@ -71,3 +71,30 @@ svg { flex-shrink: 0; }
 .window-content.flush { padding: 0; }
 .map-canvas { width: 100%; height: 100%; background: #dfe6e3; }
 .leaflet-container { font: inherit; }
+
+.table-wrapper { margin-top: 16px; border: 1px solid var(--line); border-radius: 4px; overflow: auto; background: #fff; box-shadow: 0 1px 2px #0000000a; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 11px; text-align: left; }
+.data-table thead th { background: #f8f8f8; border-bottom: 1px solid var(--line); padding: 0; font-weight: 600; color: #333; user-select: none; position: sticky; top: 0; z-index: 1; }
+.data-table thead th.active-sort { background: #ebf3fb; color: var(--accent); }
+.th-sort-button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; font-weight: 600; cursor: pointer; border: 0; text-align: left; font-size: 11px; color: inherit; }
+.col-right .th-sort-button { justify-content: flex-end; }
+.col-center .th-sort-button { justify-content: center; }
+.sort-indicator { font-size: 10px; opacity: 0.5; width: 12px; display: inline-block; text-align: center; }
+.active-sort .sort-indicator { opacity: 1; color: var(--accent); }
+.th-sort-button:hover { background: #e5f1fb; }
+.data-table tbody tr { border-bottom: 1px solid #f0f0f0; }
+.data-table tbody tr:last-child { border-bottom: 0; }
+.data-table tbody tr:hover { background-color: #f7fafd; }
+.data-table td { padding: 7px 10px; vertical-align: middle; }
+.col-right { text-align: right; }
+.col-center { text-align: center; }
+.col-left { text-align: left; }
+.num-cell { font-variant-numeric: tabular-nums; font-family: Consolas, monospace; font-size: 11px; }
+.code-cell code { font-size: 10px; background: #f2f2f2; padding: 2px 4px; border-radius: 3px; }
+.name-cell strong { font-weight: 600; color: #111; }
+.status-pill { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 500; white-space: nowrap; }
+.status-verified { background: #e6f7ec; color: #187740; }
+.status-active { background: #e9f2fd; color: #106ebe; }
+.status-under-review { background: #fef5e7; color: #b25e00; }
+.status-pending { background: #f0f0f0; color: #666; }
+

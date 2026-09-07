@@ -7,16 +7,19 @@
 
 หนึ่งไฟล์ = หนึ่งค่าใน `Kind` ของ `App.tsx` แบบหนึ่งต่อหนึ่ง
 
-### กติกาของไฟล์ใน `pages/`
+### กติกาของไฟล์ใน `pages/` และ `App.tsx`
 
+- **หลีกเลี่ยงการใส่ logic และ process ใน `App.tsx`** — `App.tsx` ทำหน้าที่เป็น MDI Window Manager / Shell เท่านั้น
+  ห้ามนำ business logic, การประมวลผลข้อมูล (data processing เช่น sort, filter, transform), หรือ state เฉพาะหน้ามากองไว้ใน `App.tsx`
+  เพื่อให้ `App.tsx` สะอาด ดูแลเฉพาะเรื่องการจัดการหน้าต่าง (open, close, focus, move, resize, arrange) และเมนู
+- **ให้แต่ละหน้า (`pages/`) รับผิดชอบการโหลดข้อมูลและจัดการ logic/process ของตัวเอง** —
+  แต่ละหน้าสามารถโหลด data (เช่น dataset, fetch ข้อมูล), จัดการ UI state (เช่น sort, filter, pagination)
+  และ process ข้อมูลภายในตัวหน้าต่างเองได้ ไม่ต้องส่งขึ้นไปให้ `App.tsx` จัดการ
 - **ห้ามใส่ chrome ของตัวเอง** — padding, scroll, กรอบ, พื้นหลังหน้าต่าง เป็นหน้าที่ของ `.window-content` ใน `App.tsx`
   ปกติ page จึง return fragment (`<>...</>`) ข้อยกเว้นคือหน้าที่ *เนื้อหาเอง* ต้องเป็น element เดียวที่มีขนาด
   (เช่น `MapPage` return `<div className="map-canvas">` ให้ Leaflet ยึด) — นั่นคือเนื้อหา ไม่ใช่ wrapper
 - **หน้าที่ต้องการเต็มกรอบไม่มี padding** ให้ `App.tsx` ใส่คลาส `flush` ให้ (`window-content flush`)
   ห้าม page ไปล้าง padding เอง เพราะ App เป็นผู้คุม chrome
-- **presentational ล้วน** ไม่มี state ของตัวเอง และ **ห้ามเรียก `window.api` เอง**
-  ข้อมูลทั้งหมด fetch ที่ `App.tsx` แล้วส่งลงมาเป็น props
-  เหตุผล: เปิดหน้าต่างเดียวกันซ้ำได้โดยแชร์ข้อมูลก้อนเดียว และไม่ยิง IPC ซ้ำตอนย่อ/ขยาย/ลากหน้าต่าง
 - ถ้าต้องสั่งให้เปิดหน้าต่างอื่น ให้รับเป็น callback prop (เช่น `onOpenDatabase`) ไม่ใช่ import `App` กลับเข้ามา
 
 ### เพิ่มหน้าใหม่ ต้องแตะ 4 จุด
