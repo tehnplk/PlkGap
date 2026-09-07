@@ -96,6 +96,7 @@ CSP อยู่ใน meta tag ที่ `src/renderer/index.html`
   ถ้าไม่มี Leaflet จะคำนวณขนาดผิดแล้ว tile เพี้ยน
 - ไอคอน marker ของ Leaflet อ้าง relative URL ที่ bundler แก้ให้ไม่ได้ แก้แล้วครั้งเดียวที่หัวไฟล์ด้วย
   `L.Icon.Default.mergeOptions` + import ไฟล์ png ผ่าน Vite — อย่าลบทิ้ง และไม่ต้องทำซ้ำ
+  `delete L.Icon.Default.prototype._getIconUrl` + `L.icon(...)` / `L.Icon.Default.mergeOptions` + import ไฟล์ png ผ่าน Vite — อย่าลบทิ้ง และไม่ต้องทำซ้ำ
 - base layer สลับผ่าน `L.control.layers` ปัจจุบันมี OSM (`Street map`) กับ Esri (`Satellite`)
   เพิ่ม layer ใหม่ได้เลยโดยไม่ต้องแก้ CSP
 - ถ้าจะวาดข้อมูลจาก PostGIS ให้ query `ST_AsGeoJSON` ตามขั้นตอนใน "เพิ่ม operation ใหม่"
