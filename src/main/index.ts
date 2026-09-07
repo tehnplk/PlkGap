@@ -6,6 +6,8 @@ import type { IpcMainInvokeEvent } from 'electron'
 let window: BrowserWindow | null = null
 let db: Awaited<ReturnType<typeof openDatabase>> | undefined
 let closing = false
+let confirmedExit = false
+let confirming = false
 const testData = process.env.PLKGAP_TEST_DATA_DIR
 if (testData) app.setPath('userData', testData)
 
@@ -30,6 +32,27 @@ function createWindow() {
   }
   mainWindow.on('maximize', publishWindowState)
   mainWindow.on('unmaximize', publishWindowState)
+  mainWindow.on('close', (event) => {
+    if (confirmedExit) return
+    event.preventDefault()
+    if (confirming) return
+    confirming = true
+    void dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['Exit', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: 'Exit PlkGap',
+      message: 'Exit PlkGap?',
+      detail: 'The local database will be closed.',
+    }).then(({ response }) => {
+      confirming = false
+      if (response !== 0 || mainWindow.isDestroyed()) return
+      confirmedExit = true
+      mainWindow.close()
+    })
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.on('closed', () => { window = null })

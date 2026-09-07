@@ -67,3 +67,7 @@ svg { flex-shrink: 0; }
 .main-titlebar .menu-trigger { height: 32px; }
 .main-titlebar .main-title { flex: 1; min-width: 0; justify-content: center; padding: 0 12px; color: #555; }
 .main-titlebar .main-window-controls { flex-shrink: 0; }
+
+.window-content.flush { padding: 0; }
+.map-canvas { width: 100%; height: 100%; background: #dfe6e3; }
+.leaflet-container { font: inherit; }

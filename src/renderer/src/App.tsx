@@ -5,15 +5,16 @@ import { Icon } from './Icon'
 import type { IconName } from './Icon'
 import { WelcomePage } from './pages/WelcomePage'
 import { DatabasePage } from './pages/DatabasePage'
+import { MapPage } from './pages/MapPage'
 import { AboutPage } from './pages/AboutPage'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
-type Kind = 'welcome' | 'database' | 'about'
+type Kind = 'welcome' | 'database' | 'map' | 'about'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
 type Item = { label: string; action: () => void; disabled?: boolean; hint?: string }
-const titles: Record<Kind, string> = { welcome: 'Welcome', database: 'Database', about: 'About PlkGap' }
-const icons: Record<Kind, IconName> = { welcome: 'home', database: 'database', about: 'info' }
+const titles: Record<Kind, string> = { welcome: 'Welcome', database: 'Database', map: 'Map', about: 'About PlkGap' }
+const icons: Record<Kind, IconName> = { welcome: 'home', database: 'database', map: 'map', about: 'info' }
 
 export function App() {
   const [status, setStatus] = useState<DatabaseStatus>()
@@ -94,7 +95,7 @@ export function App() {
   }
 
   const menus: Record<string, Item[]> = {
-    File: [{ label: 'Welcome', action: () => open('welcome') }, { label: 'Open database', action: () => open('database') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
+    File: [{ label: 'Welcome', action: () => open('welcome') }, { label: 'Open database', action: () => open('database') }, { label: 'Open map', action: () => open('map') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
     View: [{ label: 'Status bar', action: () => setStatusbar(!statusbar), hint: statusbar ? 'On' : 'Off' }],
     Window: [{ label: 'Cascade windows', action: () => arrange('cascade'), disabled: !windows.length }, { label: 'Tile windows', action: () => arrange('tile'), disabled: !windows.length }, { label: 'Close all windows', action: () => setWindows([]), disabled: !windows.length }, ...windows.map((item) => ({ label: titles[item.id], action: () => focus(item.id), hint: item.minimized ? 'Minimized' : active?.id === item.id ? 'Active' : '' }))],
     Help: [{ label: 'About PlkGap', action: () => open('about') }],
@@ -132,9 +133,10 @@ export function App() {
     <div className="workspace" ref={workspace} aria-label="MDI workspace">
       {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${titles[item.id]} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
         <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{titles[item.id]}</span><div className="window-controls"><button aria-label={`Minimize ${titles[item.id]}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${titles[item.id]}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${titles[item.id]}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
-        <div className="window-content">
+        <div className={item.id === 'map' ? 'window-content flush' : 'window-content'}>
           {item.id === 'welcome' && <WelcomePage onOpenDatabase={() => open('database')} />}
           {item.id === 'database' && <DatabasePage status={status} error={error} />}
+          {item.id === 'map' && <MapPage />}
           {item.id === 'about' && <AboutPage />}
         </div>
         {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}

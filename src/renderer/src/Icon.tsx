@@ -1,4 +1,4 @@
-﻿export type IconName = 'grid' | 'home' | 'database' | 'cascade' | 'tile' | 'close' | 'minimize' | 'maximize' | 'restore' | 'arrow' | 'info'
+﻿export type IconName = 'grid' | 'home' | 'database' | 'cascade' | 'tile' | 'close' | 'minimize' | 'maximize' | 'restore' | 'arrow' | 'info' | 'map'
 const paths: Record<IconName, string> = {
   grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   home: 'm3 10 9-7 9 7 M5 9v12h14V9 M9 21v-8h6v8',
@@ -8,6 +8,7 @@ const paths: Record<IconName, string> = {
   close: 'm6 6 12 12 M18 6 6 18', minimize: 'M5 17h14', maximize: 'M4 4h16v16H4z',
   restore: 'M8 8V3h13v13h-5 M3 8h13v13H3z', arrow: 'M4 12h16 m-6-6 6 6-6 6',
   info: 'M12 11v6 M12 7v.1 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+  map: 'M9 4 3 6.5v13.5L9 17.5 15 20l6-2.5V4l-6 2.5L9 4Z M9 4v13.5 M15 6.5V20',
 }
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>

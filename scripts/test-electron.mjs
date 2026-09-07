@@ -82,6 +82,21 @@ try {
   await expect(page.getByRole('menuitem', { name: 'About PlkGap' })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('region', { name: 'About PlkGap window' })).toBeVisible()
+  await navigation.getByRole('button', { name: 'Map', exact: true }).click()
+  const map = page.getByRole('region', { name: 'Map window' })
+  const canvas = map.getByRole('application', { name: 'Interactive map' })
+  await expect(canvas).toBeVisible()
+  const canvasBox = await canvas.boundingBox()
+  const mapBox = await map.boundingBox()
+  assert.ok(mapBox.width - canvasBox.width <= 2, 'Map canvas fills the window width apart from its border')
+  const loadedTiles = (host) => map.locator(`img.leaflet-tile[src*="${host}"]`)
+    .evaluateAll((images) => images.filter((image) => image.complete && image.naturalWidth > 0).length)
+  await expect.poll(() => loadedTiles('tile.openstreetmap.org'), { timeout: 30000 }).toBeGreaterThan(0)
+  await map.locator('.leaflet-control-layers').hover()
+  await map.locator('.leaflet-control-layers-selector').nth(1).check()
+  await expect.poll(() => loadedTiles('arcgisonline.com'), { timeout: 30000 }).toBeGreaterThan(0)
+  await expect(map.locator('img.leaflet-marker-icon')).toBeVisible()
+  await page.screenshot({ path: 'artifacts/plkgap-map.png', fullPage: true })
   await page.getByRole('menuitem', { name: 'Window', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Close all windows' }).click()
   await expect(page.locator('.child-window')).toHaveCount(0)
@@ -130,11 +145,20 @@ try {
   await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true)
   await application.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; win.restore(); win.setSize(1100, 760); win.focus() })
   await page.screenshot({ path: 'artifacts/plkgap-custom-titlebar.png', fullPage: true })
+  await application.evaluate(({ dialog }) => {
+    globalThis.confirmCalls = 0
+    dialog.showMessageBox = async () => { globalThis.confirmCalls++; return { response: 1 } }
+  })
+  await page.getByRole('button', { name: 'Close application' }).click()
+  await expect.poll(() => application.evaluate(() => globalThis.confirmCalls)).toBe(1)
+  assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1, 'Cancel keeps the application open')
+  await expect(page.getByRole('button', { name: 'Close application' })).toBeVisible()
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0 }) })
   const closed = application.waitForEvent('close')
   await page.getByRole('button', { name: 'Close application' }).click()
   await closed
   application = undefined
-  console.log('PASS: Electron MDI menus, sidebar, move/resize, minimize/restore, tile/cascade, keyboard menu, small viewport and PostGIS status')
+  console.log('PASS: Electron MDI menus, sidebar, move/resize, minimize/restore, tile/cascade, keyboard menu, small viewport, map tile switching, exit confirmation and PostGIS status')
 } finally {
   if (application) await application.close()
   await rm(directory, { recursive: true, force: true })
