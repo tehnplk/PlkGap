@@ -8,7 +8,7 @@ export function WelcomePage({ onOpenDatabase }: WelcomePageProps) {
   return <>
     <p className="eyebrow">GET STARTED</p>
     <h2>A little room to work.</h2>
-    <p>Open tools from the main menu or toolbar. Each tool has its own window within PlkGap.</p>
+    <p>Open tools from the main menu or sidebar. Each tool has its own window within PlkGap.</p>
     <button className="welcome-link" onClick={onOpenDatabase}>
       <span className="feature-icon"><Icon name="database" size={23} /></span>
       <span>

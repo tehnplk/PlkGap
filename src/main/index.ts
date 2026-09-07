@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join } from 'node:path'
 import { databaseStatus, openDatabase } from './database'
+import type { IpcMainInvokeEvent } from 'electron'
 
 let window: BrowserWindow | null = null
 let db: Awaited<ReturnType<typeof openDatabase>> | undefined
@@ -14,6 +15,7 @@ function createWindow() {
     height: 760,
     minWidth: 640,
     minHeight: 480,
+    frame: false,
     backgroundColor: '#f4f6fa',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -22,6 +24,12 @@ function createWindow() {
       sandbox: true,
     },
   })
+  const mainWindow = window
+  const publishWindowState = () => {
+    if (!mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('window:maximized', mainWindow.isMaximized())
+  }
+  mainWindow.on('maximize', publishWindowState)
+  mainWindow.on('unmaximize', publishWindowState)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.on('closed', () => { window = null })
@@ -44,6 +52,21 @@ if (!app.requestSingleInstanceLock()) {
     const path = join(app.getPath('userData'), 'plkgap-pglite')
     db = await openDatabase(path)
     if (closing) { await db.close(); app.exit(); return }
+    const authorizedWindow = (event: IpcMainInvokeEvent) => {
+      if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Unauthorized sender')
+      return window
+    }
+    ipcMain.handle('window:minimize', (event) => authorizedWindow(event).minimize())
+    ipcMain.handle('window:toggle-maximize', (event) => {
+      const target = authorizedWindow(event)
+      if (target.isMaximized()) target.unmaximize()
+      else target.maximize()
+    })
+    ipcMain.handle('window:is-maximized', (event) => authorizedWindow(event).isMaximized())
+    ipcMain.handle('window:close', (event) => {
+      const target = authorizedWindow(event)
+      setImmediate(() => { if (!target.isDestroyed()) target.close() })
+    })
     ipcMain.handle('database:status', (event) => {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
         throw new Error('Unauthorized sender')

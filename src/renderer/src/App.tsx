@@ -6,6 +6,8 @@ import type { IconName } from './Icon'
 import { WelcomePage } from './pages/WelcomePage'
 import { DatabasePage } from './pages/DatabasePage'
 import { AboutPage } from './pages/AboutPage'
+import { Sidebar } from './Sidebar'
+import { TitleBar } from './TitleBar'
 
 type Kind = 'welcome' | 'database' | 'about'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
@@ -18,7 +20,6 @@ export function App() {
   const [error, setError] = useState('')
   const [windows, setWindows] = useState<Child[]>([])
   const [menu, setMenu] = useState<string | null>(null)
-  const [toolbar, setToolbar] = useState(true)
   const [statusbar, setStatusbar] = useState(true)
   const workspace = useRef<HTMLDivElement>(null)
   const menuBar = useRef<HTMLDivElement>(null)
@@ -94,7 +95,7 @@ export function App() {
 
   const menus: Record<string, Item[]> = {
     File: [{ label: 'Welcome', action: () => open('welcome') }, { label: 'Open database', action: () => open('database') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
-    View: [{ label: 'Toolbar', action: () => setToolbar(!toolbar), hint: toolbar ? 'On' : 'Off' }, { label: 'Status bar', action: () => setStatusbar(!statusbar), hint: statusbar ? 'On' : 'Off' }],
+    View: [{ label: 'Status bar', action: () => setStatusbar(!statusbar), hint: statusbar ? 'On' : 'Off' }],
     Window: [{ label: 'Cascade windows', action: () => arrange('cascade'), disabled: !windows.length }, { label: 'Tile windows', action: () => arrange('tile'), disabled: !windows.length }, { label: 'Close all windows', action: () => setWindows([]), disabled: !windows.length }, ...windows.map((item) => ({ label: titles[item.id], action: () => focus(item.id), hint: item.minimized ? 'Minimized' : active?.id === item.id ? 'Active' : '' }))],
     Help: [{ label: 'About PlkGap', action: () => open('about') }],
   }
@@ -121,14 +122,14 @@ export function App() {
   }
   const connected = status ? 'Connected' : error ? 'Connection error' : 'Connecting'
   return <main className="app-shell">
-    <header className="app-header"><div className="brand"><span className="brand-mark"><Icon name="grid" size={19} /></span><strong>PlkGap</strong><span className="brand-divider" /><span className="brand-caption">Desktop workspace</span></div><span className="local-label"><span className="dot" />Local environment</span></header>
+    <TitleBar>
     <div className="menu-bar" role="menubar" aria-label="Main menu" ref={menuBar} onKeyDown={menuKeys}>
       {Object.entries(menus).map(([name, items]) => <div className="menu-group" key={name} role="none"><button role="menuitem" data-menu-button aria-haspopup="menu" aria-expanded={menu === name} className={menu === name ? 'menu-trigger selected' : 'menu-trigger'} onClick={() => setMenu(menu === name ? null : name)}>{name}</button>{menu === name && <div className="menu-popup" role="menu" aria-label={name}>{items.map((item) => <button role="menuitem" key={item.label} disabled={item.disabled} onClick={() => { item.action(); setMenu(null); menuBar.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')?.focus() }}><span>{item.label}</span>{item.hint && <small>{item.hint}</small>}</button>)}</div>}</div>)}
     </div>
-    {toolbar && <div className="toolbar" role="toolbar" aria-label="Main toolbar"><button onClick={() => open('welcome')} title="Open Welcome"><Icon name="home" /><span>Welcome</span></button><button className="primary-tool" onClick={() => open('database')} title="Open Database"><Icon name="database" /><span>Database</span></button><span className="tool-separator" /><button disabled={!windows.length} onClick={() => arrange('cascade')} title="Cascade windows"><Icon name="cascade" /><span>Cascade</span></button><button disabled={!windows.length} onClick={() => arrange('tile')} title="Tile windows"><Icon name="tile" /><span>Tile</span></button><span className="tool-separator" /><button disabled={!active} onClick={() => active && close(active.id)} title="Close active window"><Icon name="close" /><span>Close</span></button><span className="toolbar-end">WORKSPACE</span></div>}
-    <div className="workspace-caption"><span><Icon name="grid" size={13} /> Workspace</span><span>{windows.length} {windows.length === 1 ? 'window' : 'windows'} open</span></div>
+    </TitleBar>
+    <div className="desktop-body">
+      <Sidebar activeId={active?.id} items={(Object.keys(titles) as Kind[]).map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) }))} />
     <div className="workspace" ref={workspace} aria-label="MDI workspace">
-      {!windows.some((item) => !item.minimized) && <div className="empty-workspace"><div className="workspace-emblem"><Icon name="grid" size={30} /></div><p className="eyebrow">YOUR LOCAL WORKSPACE</p><h1>Everything in one place.</h1><p>Open a window to get started.<br />Keep your work side by side, in one workspace.</p><button className="launch-button" onClick={() => open('database')}><Icon name="database" />Open database<Icon name="arrow" size={16} /></button><button className="text-button" onClick={() => open('welcome')}>Explore the workspace <span aria-hidden="true">↗</span></button></div>}
       {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${titles[item.id]} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
         <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{titles[item.id]}</span><div className="window-controls"><button aria-label={`Minimize ${titles[item.id]}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${titles[item.id]}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${titles[item.id]}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
         <div className="window-content">
@@ -138,8 +139,9 @@ export function App() {
         </div>
         {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}
       </section>)}
+    {windows.some((item) => item.minimized) && <div className="window-dock" aria-label="Open windows">{windows.filter((item) => item.minimized).map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${titles[item.id]}` : titles[item.id]}><Icon name={icons[item.id]} size={15} />{titles[item.id]}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
     </div>
-    {!!windows.length && <div className="window-dock" aria-label="Open windows">{windows.map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${titles[item.id]}` : titles[item.id]}><Icon name={icons[item.id]} size={15} />{titles[item.id]}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
+    </div>
     {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>Local database</span><span className="status-end">{active ? titles[active.id] : 'Ready'}<span className="status-divider" />PlkGap</span></footer>}
   </main>
 }
