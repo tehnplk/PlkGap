@@ -5,7 +5,7 @@ export type IconName =
   | 'map' | 'home'
   | 'message' | 'send'
   | 'virus' | 'activity'
-  | 'settings' | 'hospital' | 'link' | 'dashboard'
+  | 'settings' | 'hospital' | 'link' | 'dashboard' | 'counter'
   | 'users'
 const paths: Record<IconName, string> = {
   grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
@@ -30,6 +30,7 @@ const paths: Record<IconName, string> = {
   hospital: 'M4 21V8l8-5 8 5v13 M2 21h20 M12 10v6 M9 13h6',
   link: 'M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5 M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5',
   dashboard: 'M3 4h8v8H3z M13 4h8v5h-8z M13 13h8v7h-8z M3 16h8v4H3z',
+  counter: 'M4 5h16v14H4z M8 5v14 M4 9h4 M4 13h4 M4 17h4 M12 9h5 M12 13h5',
   users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M2 21v-1a7 7 0 0 1 14 0v1 M17 3.5a4 4 0 0 1 0 7.7 M22 21v-1a5 5 0 0 0-3.5-4.8',
 }
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

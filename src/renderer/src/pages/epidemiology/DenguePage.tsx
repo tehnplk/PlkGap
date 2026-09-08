@@ -23,7 +23,7 @@ export function DenguePage() {
   return <>
     <div className="content-heading">
       <div>
-        <p className="eyebrow">ระบบระบาดวิทยาและควบคุมโรค</p>
+        <p className="eyebrow">งานระบาดวิทยาควบคุมโรค</p>
         <h2>ไข้เลือดออก</h2>
       </div>
       <span className="badge error">{cases} ราย สะสมปีนี้</span>

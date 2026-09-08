@@ -14,6 +14,8 @@ export interface SidebarGroup {
   id: string
   label: string
   icon: IconName
+  /** Start folded away — for groups that are opened rarely. */
+  collapsed?: boolean
   items: SidebarItem[]
 }
 
@@ -29,7 +31,8 @@ export function Sidebar({ activeId, groups }: SidebarProps) {
   const [width, setWidth] = useState(240)
   const [maximum, setMaximum] = useState(240)
   const [dragging, setDragging] = useState(false)
-  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(
+    () => groups.filter((group) => group.collapsed).map((group) => group.id))
   const expanded = width > 44
 
   useEffect(() => {
@@ -77,7 +80,7 @@ export function Sidebar({ activeId, groups }: SidebarProps) {
 
   return <aside ref={sidebar} style={{ width, maxWidth: '50%' }} className={`sidebar ${expanded ? 'expanded' : 'collapsed'} ${dragging ? 'dragging' : ''}`} aria-label="Sidebar">
     <div className="sidebar-header">
-      {expanded && <strong>PlkGap</strong>}
+      {expanded && <strong>PLK GAP</strong>}
       <button className="sidebar-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls="sidebar-navigation" aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'} title={expanded ? 'Collapse sidebar' : 'Expand sidebar'}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
       </button>

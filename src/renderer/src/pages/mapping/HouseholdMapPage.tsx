@@ -1,51 +1,43 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerRetina from 'leaflet/dist/images/marker-icon-2x.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
+import 'leaflet.markercluster'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import type { BoundaryCollection, Household } from '../../../../shared/api'
 
-delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl
-
-const defaultIcon = L.icon({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerRetina,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  tooltipAnchor: [16, -28],
-  shadowSize: [41, 41],
+/** A blue house, drawn inline so the marker needs no image file and no CDN. */
+const houseIcon = L.divIcon({
+  className: 'house-marker',
+  html: `<svg viewBox="0 0 24 24" width="26" height="26" fill="#1f66d0" stroke="#0f3f8a" stroke-width="1.2"
+    stroke-linejoin="round"><path d="M12 3 3 10.5V21h6v-6h6v6h6V10.5Z" /></svg>`,
+  iconSize: [26, 26],
+  iconAnchor: [13, 24],
+  popupAnchor: [0, -22],
 })
-
-L.Icon.Default.mergeOptions({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerRetina,
-  shadowUrl: markerShadow,
-})
-
-L.Marker.prototype.options.icon = defaultIcon
-
-interface Household { hid: string; village: string; members: number; lat: number; lng: number; surveyed: boolean }
 
 const center: L.LatLngTuple = [16.8211, 100.2659]
-const HOUSEHOLDS: Household[] = [
-  { hid: '00001', village: 'หมู่ 1 บ้านคลองเตย', members: 4, lat: 16.8248, lng: 100.2611, surveyed: true },
-  { hid: '00002', village: 'หมู่ 1 บ้านคลองเตย', members: 2, lat: 16.8231, lng: 100.2694, surveyed: true },
-  { hid: '00003', village: 'หมู่ 2 บ้านท่าทอง', members: 5, lat: 16.8156, lng: 100.2582, surveyed: false },
-  { hid: '00004', village: 'หมู่ 2 บ้านท่าทอง', members: 3, lat: 16.8123, lng: 100.2721, surveyed: true },
-  { hid: '00005', village: 'หมู่ 3 บ้านหัวรอ', members: 6, lat: 16.8302, lng: 100.2748, surveyed: false },
-  { hid: '00006', village: 'หมู่ 3 บ้านหัวรอ', members: 1, lat: 16.8355, lng: 100.2650, surveyed: true },
-  { hid: '00007', village: 'หมู่ 4 บ้านวัดจันทร์', members: 4, lat: 16.8087, lng: 100.2640, surveyed: true },
-  { hid: '00008', village: 'หมู่ 4 บ้านวัดจันทร์', members: 2, lat: 16.8064, lng: 100.2569, surveyed: false },
-]
 
 export function HouseholdMapPage() {
   const container = useRef<HTMLDivElement>(null)
+  const [households, setHouseholds] = useState<Household[]>()
+  const [areas, setAreas] = useState<{ district: BoundaryCollection; subdistrict: BoundaryCollection }>()
+  const [error, setError] = useState('')
 
   useEffect(() => {
+    Promise.all([
+      window.api.listHouseholds(),
+      window.api.listBoundaries('district'),
+      window.api.listBoundaries('subdistrict'),
+    ])
+      .then(([homes, district, subdistrict]) => { setHouseholds(homes); setAreas({ district, subdistrict }) })
+      .catch((reason: unknown) => { setHouseholds([]); setError(String(reason)) })
+  }, [])
+
+  useEffect(() => {
+    if (!households) return
     const element = container.current!
-    const map = L.map(element, { center, zoom: 13 })
+    const map = L.map(element, { center, zoom: 12 })
     const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
@@ -55,34 +47,40 @@ export function HouseholdMapPage() {
       attribution: 'Tiles &copy; Esri',
     })
 
-    const surveyed = L.layerGroup().addTo(map)
-    const pending = L.layerGroup().addTo(map)
-    for (const home of HOUSEHOLDS) {
-      const popup = `<strong>HID ${home.hid}</strong><br />${home.village}<br />สมาชิก ${home.members} คน<br />${home.surveyed ? 'สำรวจแล้ว' : 'ยังไม่สำรวจ'}`
-      L.marker([home.lat, home.lng], { icon: defaultIcon, title: `ครัวเรือน ${home.hid}` })
-        .bindPopup(popup)
-        .addTo(home.surveyed ? surveyed : pending)
-      L.circleMarker([home.lat, home.lng], {
-        radius: 9,
-        weight: 2,
-        color: home.surveyed ? '#187740' : '#b25e00',
-        fillColor: home.surveyed ? '#37b06a' : '#e0a13c',
-        fillOpacity: 0.35,
-      }).addTo(home.surveyed ? surveyed : pending)
+    // Thousands of houses would swamp the map, so they go in a cluster layer that opens on zoom.
+    const cluster = L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 55 })
+    for (const home of households) {
+      const village = Number(home.village) || home.village
+      const address = `${home.house || '-'} หมู่ที่ ${village || '-'}`
+      L.marker([home.latitude, home.longitude], { icon: houseIcon, title: address })
+        .bindPopup(`<strong>${address}</strong><br />ต.${home.tambonName || '-'} อ.${home.ampurName || '-'}`)
+        .addTo(cluster)
     }
+    map.addLayer(cluster)
+    if (households.length) map.fitBounds(cluster.getBounds().pad(0.1))
 
-    L.control.layers(
-      { 'แผนที่ถนน': streets, 'ภาพดาวเทียม': satellite },
-      { 'สำรวจแล้ว': surveyed, 'ยังไม่สำรวจ': pending },
-      { collapsed: false },
-    ).addTo(map)
+    // Administrative outlines from the SUB-HDC PostGIS server, drawn under the households.
+    const outline = (collection: BoundaryCollection, color: string, weight: number) =>
+      L.geoJSON(collection as unknown as GeoJSON.GeoJsonObject, {
+        style: { color, weight, fill: true, fillOpacity: 0.03, fillColor: color },
+        onEachFeature: (feature, layer) => layer.bindTooltip(String(feature.properties?.name ?? ''), { sticky: true }),
+      })
+    const district = areas ? outline(areas.district, '#7843b5', 2) : L.layerGroup()
+    const subdistrict = areas ? outline(areas.subdistrict, '#9c79bc', 1) : L.layerGroup()
+    district.addTo(map)
+
+    L.control.layers({ 'แผนที่ถนน': streets, 'ภาพดาวเทียม': satellite }, {
+      'ขอบเขตอำเภอ': district,
+      'ขอบเขตตำบล': subdistrict,
+      'ครัวเรือน': cluster,
+    }, { collapsed: false }).addTo(map)
 
     const legend = new L.Control({ position: 'bottomleft' })
     legend.onAdd = () => {
       const box = L.DomUtil.create('div', 'map-legend')
       box.innerHTML = `<strong>ตำแหน่งครัวเรือน (แฟ้ม Home)</strong>
-        <span><i style="background:#37b06a;border-color:#187740"></i>สำรวจแล้ว ${HOUSEHOLDS.filter((home) => home.surveyed).length} ครัวเรือน</span>
-        <span><i style="background:#e0a13c;border-color:#b25e00"></i>ยังไม่สำรวจ ${HOUSEHOLDS.filter((home) => !home.surveyed).length} ครัวเรือน</span>`
+        <span>${households.length.toLocaleString('en-US')} ครัวเรือนที่มีพิกัด</span>
+        ${error ? `<span>${error}</span>` : ''}`
       return box
     }
     legend.addTo(map)
@@ -90,7 +88,7 @@ export function HouseholdMapPage() {
     const observer = new ResizeObserver(() => map.invalidateSize())
     observer.observe(element)
     return () => { observer.disconnect(); map.remove() }
-  }, [])
+  }, [households, areas, error])
 
   return <div className="map-canvas" ref={container} role="application" aria-label="แผนที่ตำแหน่งครัวเรือน" />
 }

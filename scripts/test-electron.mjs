@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import reference from '../src/main/reference/c-tables.json' with { type: 'json' }
 import files from '../src/main/reference/f43-tables.json' with { type: 'json' }
+import boundaries from '../src/main/reference/boundaries.json' with { type: 'json' }
 
 const referenceRows = reference.tables.reduce((sum, table) => sum + table.rows.length, 0)
 // A fresh temp userData is exactly the state of a brand new machine after install.
@@ -17,7 +18,9 @@ const standardFiles = files.tables.map((table) => table.name)
 function writeZip(path, entries) {
   return new Promise((resolve, reject) => {
     const zip = new yazl.ZipFile()
-    for (const name of entries) zip.addBuffer(Buffer.from('HOSPCODE|PID'), name)
+    // One data row per file, with a hospcode too long for the dictionary's 5 characters.
+    const content = ['HOSPCODE', 'GA0014056'].join('\n')
+    for (const name of entries) zip.addBuffer(Buffer.from(content), name)
     zip.outputStream.pipe(createWriteStream(path)).on('close', resolve).on('error', reject)
     zip.end()
   })
@@ -55,17 +58,24 @@ try {
   const statusBounds = await page.locator('.status-bar').boundingBox()
   const titleBounds = await page.locator('.main-titlebar').boundingBox()
   assert.equal(titleBounds.y, 0, 'Custom title bar starts at the top')
-  await expect(page.locator('.main-title')).toHaveText(/^PlkGap version \d+\.\d+\.\d+$/)
+  await expect(page.locator('.main-title')).toHaveText(/^PLK GAP version \d+\.\d+\.\d+$/)
+  await expect(page.locator('.sidebar-header strong')).toHaveText('PLK GAP')
   assert.equal(menuBounds.y, 0, 'Menu is in the top title-bar row')
   assert.equal(menuBounds.height, titleBounds.height, 'Menu shares the title-bar height')
   assert.equal(workspaceBounds.y, menuBounds.y + menuBounds.height, 'Workspace starts directly below main menu')
   assert.equal(workspaceBounds.y + workspaceBounds.height, statusBounds.y, 'Workspace fills available height')
 
   // Sidebar menu groups: every group header is present and children live inside their own group
-  const groupNames = ['ระบบ 43 แฟ้ม', 'ระบบวิเคราะห์ข้อมูล', 'ระบบแผนที่', 'ระบบสื่อสาร', 'ระบบระบาดวิทยาและควบคุมโรค', 'ตั้งค่า']
+  const groupNames = ['ระบบ 43 แฟ้ม', 'ระบบวิเคราะห์ข้อมูล', 'ระบบแผนที่', 'ระบบสื่อสาร', 'งานระบาดวิทยาควบคุมโรค', 'ตั้งค่า']
   for (const name of groupNames) await expect(navigation.getByRole('button', { name, exact: true })).toBeVisible()
   const files43 = navigation.getByRole('button', { name: 'ระบบ 43 แฟ้ม', exact: true })
   await expect(files43).toHaveAttribute('aria-expanded', 'true')
+  // ตั้งค่า is opened rarely, so it starts folded away.
+  const settings = navigation.getByRole('button', { name: 'ตั้งค่า', exact: true })
+  await expect(settings).toHaveAttribute('aria-expanded', 'false')
+  await expect(navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true })).toBeHidden()
+  await settings.click()
+  await expect(navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true })).toBeVisible()
   await expect(navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true })).toBeVisible()
   await files43.click()
   await expect(files43).toHaveAttribute('aria-expanded', 'false')
@@ -75,7 +85,7 @@ try {
   await page.screenshot({ path: 'artifacts/plkgap-sidebar-groups.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
-  const importWindow = page.getByRole('region', { name: 'นำเข้าข้อมูล - Import52FilePage window' })
+  const importWindow = page.getByRole('region', { name: 'นำเข้าข้อมูล - Import52Files window' })
   await expect(importWindow).toBeVisible()
   await expect(importWindow).toHaveClass(/maximized/)
   assert.deepEqual(await page.locator('.workspace').boundingBox(), workspaceBounds, 'Opening a child does not shrink the workspace')
@@ -85,9 +95,9 @@ try {
   await expect(importWindow.getByRole('button', { name: 'ล้างประวัติ' })).toHaveCount(0)
   await expect(importWindow.locator('.section-title')).toHaveText('ประวัติการนำเข้า')
   assert.deepEqual(await importWindow.locator('thead th').allInnerTexts(),
-    ['#', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'สถานะ', 'คุณภาพโครงสร้าง'])
+    ['#', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'แถว', 'สถานะ', 'คุณภาพโครงสร้าง'])
   // Child window titles carry the page component that renders them.
-  await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - Import52FilePage')
+  await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - Import52Files')
 
   // The [...] picker is a native dialog, so stub it the same way the exit dialog is stubbed below.
   await expect(importWindow.getByRole('button', { name: 'นำเข้า', exact: true })).toBeDisabled()
@@ -124,6 +134,83 @@ try {
   await expect(importWindow.locator('.check-problems')).toContainText('holiday-photo.jpg')
   await expect(importWindow.locator('.check-problems')).toContainText('ขาด 51 แฟ้ม')
   await expect(importButton).toBeDisabled()
+
+  // Import for real: the run lands in the history with the file it came from.
+  await pick(validZip)
+  await browse()
+  await expect(importButton).toBeEnabled()
+  await importButton.click()
+  await expect(importWindow.getByRole('status')).toContainText('นำเข้าสำเร็จ', { timeout: 60000 })
+  await expect(importWindow.locator('tbody tr')).toHaveCount(1)
+  const run = importWindow.locator('tbody tr').first()
+  await expect(run).toContainText('F43_07494_20260819111824.ZIP')
+  await expect(run).toContainText('สำเร็จ')
+  await expect(importButton).toBeDisabled()
+  await expect(importWindow.getByLabel('เลือกไฟล์')).toHaveValue('', { timeout: 10000 })
+
+  // ตรวจสอบคุณภาพโครงสร้าง checks the imported rows against c_files_schema and stores the result.
+  await run.getByRole('button', { name: 'ตรวจสอบคุณภาพโครงสร้าง' }).click()
+  await expect(importWindow.locator('.section-title').last())
+    .toHaveText('ผลตรวจคุณภาพโครงสร้าง — F43_07494_20260819111824.ZIP', { timeout: 60000 })
+  const findingTable = importWindow.locator('table[aria-label="ผลตรวจคุณภาพโครงสร้าง"]')
+  const findings = findingTable.locator('tbody tr')
+  await expect(findingTable).toContainText('ความยาวเกิน 5 อักขระ')
+  await expect(findingTable).toContainText('ห้ามเป็นค่าว่าง')
+  assert.deepEqual(await findingTable.locator('thead th').allInnerTexts(),
+    ['แฟ้ม', 'ฟิลด์', 'เกณฑ์', 'จำนวนแถว', 'ไม่ผ่านเงื่อนไข', 'ร้อยละ', 'ระดับ', ''])
+  // One row per file, all of it failing, so the share is 100.00 percent.
+  await expect(findings.first()).toContainText('100.00')
+  // The rows behind a finding can be listed, with the offending value in view.
+  await findings.first().getByRole('button', { name: 'ดูแถวที่ไม่ผ่าน' }).click()
+  const modal = importWindow.locator('dialog.large-modal')
+  const failingTable = modal.locator('table[aria-label="แถวที่ไม่ผ่านเงื่อนไข"]')
+  await expect(modal).toBeVisible()
+  await expect(modal).toContainText('แถวที่ไม่ผ่าน')
+  await expect(failingTable.locator('tbody tr')).toHaveCount(1)
+  // Service files always carry hospcode, pid, seq and their service date, whatever the primary key is.
+  const shownColumns = await failingTable.locator('thead th').allInnerTexts()
+  for (const column of ['HOSPCODE', 'PID', 'SEQ', 'DATETIME_SERV']) {
+    assert.ok(shownColumns.includes(column), `${column} is a standing column, got ${shownColumns.join(', ')}`)
+  }
+  // The modal is draggable by its header and closes from the X.
+  const beforeDrag = await modal.boundingBox()
+  const modalHeader = modal.locator('header')
+  const headerBox = await modalHeader.boundingBox()
+  await page.mouse.move(headerBox.x + 60, headerBox.y + headerBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(headerBox.x + 160, headerBox.y + headerBox.height / 2 + 40, { steps: 8 })
+  await page.mouse.up()
+  const afterDrag = await modal.boundingBox()
+  assert.ok(afterDrag.x > beforeDrag.x + 50 && afterDrag.y > beforeDrag.y + 20, 'The modal moves with its header')
+  await modal.getByRole('button', { name: 'ปิด', exact: true }).click()
+  await expect(modal).toBeHidden()
+  const firstCount = await findings.count()
+  assert.ok(firstCount > 0, 'the structure check reports what it found')
+  // Re-checking is allowed any time and replaces the previous result instead of piling up.
+  await run.getByRole('button', { name: 'ตรวจสอบคุณภาพโครงสร้าง' }).click()
+  await expect(findings).toHaveCount(firstCount, { timeout: 60000 })
+  await page.screenshot({ path: 'artifacts/plkgap-import.png', fullPage: true })
+
+  // ปริมาณข้อมูล: a fiscal year runs October to September, so the grid is 12 months plus a total.
+  await navigation.getByRole('button', { name: 'ปริมาณข้อมูล', exact: true }).click()
+  const dataCount = page.getByRole('region', { name: 'ปริมาณข้อมูล - DataCount window' })
+  await expect(dataCount).toBeVisible()
+  // It opens on service, so there is something on screen without touching the picker.
+  await expect(dataCount.getByLabel('เลือกแฟ้ม')).toHaveValue('service')
+  await expect(dataCount.locator('tbody tr')).toHaveCount(5)
+  await expect(dataCount).toContainText('date_serv')
+  await dataCount.getByLabel('เลือกแฟ้ม').selectOption('person')
+  assert.deepEqual(await dataCount.locator('thead th').allInnerTexts(),
+    ['ปีงบ', 'ต.ค.', 'พ.ย.', 'ธ.ค.', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'รวม'])
+  await expect(dataCount.locator('tbody tr')).toHaveCount(5)
+  const fiscalYears = await dataCount.locator('tbody tr td:first-child').allInnerTexts()
+  assert.deepEqual(fiscalYears.map(Number), [0, 1, 2, 3, 4].map((back) => Number(fiscalYears[0]) - back),
+    'five fiscal years counting back from the current one')
+  await expect(dataCount).toContainText('d_update')
+  await page.screenshot({ path: 'artifacts/plkgap-data-count.png', fullPage: true })
+  await dataCount.getByRole('button', { name: 'Close ปริมาณข้อมูล - DataCount' }).click()
+  await expect(dataCount).toHaveCount(0)
+
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false')
   assert.ok((await page.locator('.workspace').boundingBox()).width > workspaceBounds.width, 'Collapsing gives space back to MDI')
@@ -136,27 +223,32 @@ try {
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
   await expect(importWindow).toHaveCount(1)
 
-  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52FilePage' }).click()
+  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52Files' }).click()
   await expect(importWindow).not.toHaveClass(/maximized/)
+  // Drags are pointer-capture based, so give each press a beat before moving and poll the result:
+  // a React re-render between down and move used to make this flap.
+  async function drag(from, to) {
+    await page.mouse.move(from.x, from.y)
+    await page.mouse.down()
+    await page.waitForTimeout(60)
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 6 })
+    await page.mouse.move(to.x, to.y, { steps: 6 })
+    await page.waitForTimeout(60)
+    await page.mouse.up()
+  }
   const beforeMove = await importWindow.boundingBox()
-  await page.mouse.move(beforeMove.x + 100, beforeMove.y + 18)
-  await page.mouse.down()
-  await page.mouse.move(beforeMove.x + 170, beforeMove.y + 38, { steps: 8 })
-  await page.mouse.up()
+  await drag({ x: beforeMove.x + 100, y: beforeMove.y + 18 }, { x: beforeMove.x + 170, y: beforeMove.y + 38 })
+  await expect.poll(async () => (await importWindow.boundingBox()).x).toBeGreaterThan(beforeMove.x + 50)
   const afterMove = await importWindow.boundingBox()
-  assert.ok(afterMove.x > beforeMove.x + 50, 'Child window moves')
   const handle = await importWindow.locator('.resize-handle').boundingBox()
-  await page.mouse.move(handle.x + 12, handle.y + 12)
-  await page.mouse.down()
-  await page.mouse.move(handle.x + 72, handle.y + 12, { steps: 8 })
-  await page.mouse.up()
-  assert.ok((await importWindow.boundingBox()).width > afterMove.width + 40, 'Child window resizes')
-  await importWindow.getByRole('button', { name: 'Maximize นำเข้าข้อมูล - Import52FilePage' }).click()
+  await drag({ x: handle.x + 12, y: handle.y + 12 }, { x: handle.x + 72, y: handle.y + 12 })
+  await expect.poll(async () => (await importWindow.boundingBox()).width).toBeGreaterThan(afterMove.width + 40)
+  await importWindow.getByRole('button', { name: 'Maximize นำเข้าข้อมูล - Import52Files' }).click()
   await expect(importWindow).toHaveClass(/maximized/)
-  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52FilePage' }).click()
-  await importWindow.getByRole('button', { name: 'Minimize นำเข้าข้อมูล - Import52FilePage' }).click()
+  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52Files' }).click()
+  await importWindow.getByRole('button', { name: 'Minimize นำเข้าข้อมูล - Import52Files' }).click()
   await expect(importWindow).toHaveCount(0)
-  await page.locator('.window-dock').getByRole('button', { name: 'นำเข้าข้อมูล - Import52FilePage', exact: true }).click()
+  await page.locator('.window-dock').getByRole('button', { name: 'นำเข้าข้อมูล - Import52Files', exact: true }).click()
   await expect(importWindow).toBeVisible()
 
   await navigation.getByRole('button', { name: 'ไข้เลือดออก', exact: true }).click()
@@ -195,12 +287,15 @@ try {
   await map.locator('.leaflet-control-layers-selector').nth(1).check()
   await expect.poll(() => loadedTiles('arcgisonline.com'), { timeout: 30000 }).toBeGreaterThan(0)
   await expect(map.locator('.map-legend')).toContainText('ตำแหน่งครัวเรือน')
-  const markerIcon = map.locator('img.leaflet-marker-icon').first()
-  await expect(markerIcon).toBeVisible()
-  await expect.poll(async () => markerIcon.evaluate((img) => img.complete && img.naturalWidth > 0), { timeout: 10000 }).toBe(true)
-  const markerShadow = map.locator('img.leaflet-marker-shadow').first()
-  await expect(markerShadow).toBeVisible()
-  await expect.poll(async () => markerShadow.evaluate((img) => img.complete && img.naturalWidth > 0), { timeout: 10000 }).toBe(true)
+  // Households come from the HOME file as green house markers inside a cluster layer.
+  await expect(map.locator('.map-legend')).toContainText('ครัวเรือนที่มีพิกัด')
+  await expect(map.locator('.leaflet-control-layers-overlays')).toContainText('ครัวเรือน')
+  // Administrative outlines come from the SUB-HDC PostGIS boundaries seeded into c_district.
+  await expect(map.locator('.leaflet-control-layers-overlays')).toContainText('ขอบเขตอำเภอ')
+  await expect(map.locator('.leaflet-control-layers-overlays')).toContainText('ขอบเขตตำบล')
+  // One SVG path per district. Whether a given polygon is inside the current viewport depends on
+  // the zoom, so count the layers rather than asserting one is on screen.
+  await expect(map.locator('path.leaflet-interactive')).toHaveCount(boundaries.districts.length, { timeout: 30000 })
   await page.screenshot({ path: 'artifacts/plkgap-map.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true }).click()

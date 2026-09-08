@@ -1,8 +1,10 @@
 import { PGlite } from '@electric-sql/pglite'
 import { postgis } from '@electric-sql/pglite-postgis'
-import type { DatabaseStatus, Hospital, ImportLogEntry } from '../shared/api'
+import type { BoundaryCollection, BoundaryLevel, DataCountResult, DatabaseStatus, FailingRows, Hospital, Household, ImportLogEntry, StructureCheckResult, StructureFinding } from '../shared/api'
 import referenceData from './reference/c-tables.json'
 import fileStructure from './reference/f43-tables.json'
+import geographyData from './reference/geography.json'
+import boundaryData from './reference/boundaries.json'
 
 export interface ReferenceTable {
   name: string
@@ -69,6 +71,44 @@ export async function listStandardFiles(db: PGlite): Promise<string[]> {
   return rows.map((row) => row.file_name)
 }
 
+/** Outlines of one administrative level, as GeoJSON that Leaflet can draw directly. */
+export async function listBoundaries(db: PGlite, level: BoundaryLevel): Promise<BoundaryCollection> {
+  const table = { province: 'c_province', district: 'c_district', subdistrict: 'c_subdistrict' }[level]
+  if (!table) throw new Error(`ไม่รู้จักระดับ ${level}`)
+  const code = level === 'province' ? 'changwat'
+    : level === 'district' ? "changwat || ampur"
+    : "changwat || ampur || tambon"
+  const { rows } = await db.query<{ collection: BoundaryCollection }>(`
+    SELECT json_build_object(
+      'type', 'FeatureCollection',
+      'features', COALESCE(json_agg(json_build_object(
+        'type', 'Feature',
+        'properties', json_build_object('name', name_th, 'code', ${code}),
+        'geometry', ST_AsGeoJSON(geom)::json)), '[]'::json)
+    ) AS collection
+    FROM ${quote(table)} WHERE geom IS NOT NULL`)
+  return rows[0].collection
+}
+
+/**
+ * Households that carry a usable coordinate. HOME stores latitude/longitude as text, so anything
+ * that is not a number inside Thailand's bounding box is dropped rather than plotted in the sea.
+ */
+export async function listHouseholds(db: PGlite, limit = 50000): Promise<Household[]> {
+  // HOME stores area codes, not names, so the geography lookup supplies them.
+  const { rows } = await db.query<Household>(`
+    SELECT h.hospcode, h.hid, h.house, h.village,
+      COALESCE(t.name_th, '') AS "tambonName", COALESCE(a.name_th, '') AS "ampurName",
+      h.latitude::float8 AS latitude, h.longitude::float8 AS longitude
+    FROM home h
+    LEFT JOIN c_subdistrict t ON t.changwat = h.changwat AND t.ampur = h.ampur AND t.tambon = h.tambon
+    LEFT JOIN c_district a ON a.changwat = h.changwat AND a.ampur = h.ampur
+    WHERE h.latitude ~ '^[0-9]+([.][0-9]+)?$' AND h.longitude ~ '^[0-9]+([.][0-9]+)?$'
+      AND h.latitude::float8 BETWEEN 5 AND 21 AND h.longitude::float8 BETWEEN 96 AND 106
+    LIMIT $1`, [limit])
+  return rows
+}
+
 /** Looks a service unit up in the seeded `c_hospital` reference table. */
 export async function findHospital(db: PGlite, hospcode: string): Promise<Hospital | null> {
   const { rows } = await db.query<Hospital>(`
@@ -123,13 +163,102 @@ export async function initializeSchema(db: PGlite, data: {
 } = {}) {
   await ensureInitTable(db)
   const reference = await loadReferenceTables(db, data.reference)
-  const files = await createFileTables(db, data.structure)
+  const geography = await loadGeographyTables(db)
   const app = await createAppTables(db)
-  return { reference, files, app, firstRun: reference.applied || files.applied || app.applied }
+  const files = await createFileTables(db, data.structure)
+  return { reference, geography, files, app,
+    firstRun: reference.applied || geography.applied || files.applied || app.applied }
+}
+
+export interface BoundaryData {
+  source: string
+  pulledAt: string
+  tolerance: string
+  provinces: { changwat: string; nameTh: string; geom: unknown }[]
+  districts: { changwat: string; ampur: string; nameTh: string; geom: unknown }[]
+  subdistricts: { changwat: string; ampur: string; tambon: string; nameTh: string; geom: unknown }[]
+}
+
+export interface GeographyData {
+  source: string
+  pulledAt: string
+  provinces: { changwat: string; nameTh: string; nameEn: string }[]
+  districts: { changwat: string; ampur: string; code: string; nameTh: string; nameEn: string; postalCode: string }[]
+  subdistricts: { changwat: string; ampur: string; tambon: string; code: string; nameTh: string; nameEn: string; postalCode: string }[]
+}
+
+/**
+ * The province/district/subdistrict lookup, keyed the way the 43 files code an address:
+ * CHANGWAT + AMPUR + TAMBON. Data comes from `reference/geography.json`
+ * (see `scripts/pull-geography.mjs`); like the c_* tables it is upstream-only, so a newer file
+ * replaces the whole set.
+ */
+export async function loadGeographyTables(db: PGlite, data: GeographyData = geographyData as GeographyData,
+  boundaries: BoundaryData = boundaryData as BoundaryData) {
+  await ensureInitTable(db)
+  const version = `${versionOf(data)}+${boundaries.pulledAt}`
+  const done = await initializedVersion(db, 'geography')
+  if (done?.version === version) return { ...done, applied: false }
+
+  await db.exec(`DROP TABLE IF EXISTS c_province; DROP TABLE IF EXISTS c_district; DROP TABLE IF EXISTS c_subdistrict;
+    CREATE TABLE c_province (changwat varchar(2) PRIMARY KEY, name_th text NOT NULL, name_en text NOT NULL);
+    CREATE TABLE c_district (changwat varchar(2) NOT NULL, ampur varchar(2) NOT NULL, code varchar(4) NOT NULL,
+      name_th text NOT NULL, name_en text NOT NULL, postal_code varchar(5) NOT NULL DEFAULT '',
+      PRIMARY KEY (changwat, ampur));
+    CREATE TABLE c_subdistrict (changwat varchar(2) NOT NULL, ampur varchar(2) NOT NULL, tambon varchar(2) NOT NULL,
+      code varchar(6) NOT NULL, name_th text NOT NULL, name_en text NOT NULL,
+      postal_code varchar(5) NOT NULL DEFAULT '', PRIMARY KEY (changwat, ampur, tambon));
+    ALTER TABLE c_province ADD COLUMN geom geometry(MultiPolygon, 4326);
+    ALTER TABLE c_district ADD COLUMN geom geometry(MultiPolygon, 4326);
+    ALTER TABLE c_subdistrict ADD COLUMN geom geometry(MultiPolygon, 4326);`)
+
+  const insert = async (sql: string, rows: unknown[][], columns: number) => {
+    const perBatch = Math.max(1, Math.floor(5000 / columns))
+    for (let index = 0; index < rows.length; index += perBatch) {
+      const batch = rows.slice(index, index + perBatch)
+      const values: unknown[] = []
+      const placeholders = batch.map((row) => {
+        const slots = row.map((value) => { values.push(value); return `$${values.length}` })
+        return `(${slots.join(', ')})`
+      })
+      await db.query(`${sql} ${placeholders.join(', ')}`, values)
+    }
+  }
+  await insert('INSERT INTO c_province (changwat, name_th, name_en) VALUES',
+    data.provinces.map((row) => [row.changwat, row.nameTh, row.nameEn]), 3)
+  await insert('INSERT INTO c_district (changwat, ampur, code, name_th, name_en, postal_code) VALUES',
+    data.districts.map((row) => [row.changwat, row.ampur, row.code, row.nameTh, row.nameEn, row.postalCode]), 6)
+  await insert('INSERT INTO c_subdistrict (changwat, ampur, tambon, code, name_th, name_en, postal_code) VALUES',
+    data.subdistricts.map((row) => [row.changwat, row.ampur, row.tambon, row.code, row.nameTh, row.nameEn, row.postalCode]), 7)
+
+  // Boundaries come from the SUB-HDC PostGIS server and cover one province, so they are matched
+  // onto the country-wide name rows rather than loaded as tables of their own.
+  const shape = async (sql: string, rows: { geom: unknown }[], keys: (row: never) => unknown[]) => {
+    for (const row of rows) {
+      await db.query(sql, [...keys(row as never), JSON.stringify(row.geom)])
+    }
+    return rows.length
+  }
+  const shaped = await shape(
+    'UPDATE c_province SET geom = ST_Multi(ST_GeomFromGeoJSON($2)) WHERE changwat = $1',
+    boundaries.provinces, (row: { changwat: string }) => [row.changwat])
+    + await shape('UPDATE c_district SET geom = ST_Multi(ST_GeomFromGeoJSON($3)) WHERE changwat = $1 AND ampur = $2',
+      boundaries.districts, (row: { changwat: string; ampur: string }) => [row.changwat, row.ampur])
+    + await shape(`UPDATE c_subdistrict SET geom = ST_Multi(ST_GeomFromGeoJSON($4))
+        WHERE changwat = $1 AND ampur = $2 AND tambon = $3`,
+      boundaries.subdistricts,
+      (row: { changwat: string; ampur: string; tambon: string }) => [row.changwat, row.ampur, row.tambon])
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_c_province_geom ON c_province USING GIST (geom);
+    CREATE INDEX IF NOT EXISTS idx_c_district_geom ON c_district USING GIST (geom);
+    CREATE INDEX IF NOT EXISTS idx_c_subdistrict_geom ON c_subdistrict USING GIST (geom);`)
+
+  const total = data.provinces.length + data.districts.length + data.subdistricts.length
+  await recordInit(db, 'geography', version, 3, total)
+  return { version, table_count: 3, row_count: total, shaped, applied: true }
 }
 
 /** Bump when a table below changes shape, so the new DDL runs once on the next start. */
-const APP_SCHEMA_VERSION = 'app@1'
+const APP_SCHEMA_VERSION = 'app@4'
 
 /**
  * Tables PlkGap owns itself, as opposed to the ones mirrored from SUB-HDC.
@@ -152,9 +281,27 @@ export async function createAppTables(db: PGlite) {
     row_count integer NOT NULL DEFAULT 0,
     message text NOT NULL DEFAULT ''
   );
-  CREATE INDEX IF NOT EXISTS idx_import52files_log_started ON import52files_log (started_at DESC);`)
-  await recordInit(db, 'app', APP_SCHEMA_VERSION, 1, 0)
-  return { version: APP_SCHEMA_VERSION, table_count: 1, row_count: 0, applied: true }
+  CREATE INDEX IF NOT EXISTS idx_import52files_log_started ON import52files_log (started_at DESC);
+
+  -- Purely derived from the imported rows, so unlike the import history it can be rebuilt.
+  DROP TABLE IF EXISTS structure_check_log;
+  CREATE TABLE structure_check_log (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    zip_name text NOT NULL,
+    checked_at timestamptz NOT NULL DEFAULT now(),
+    table_name text NOT NULL,
+    column_name text NOT NULL,
+    rule text NOT NULL,
+    detail text NOT NULL DEFAULT '',
+    found integer NOT NULL DEFAULT 0,
+    level text NOT NULL DEFAULT 'error',
+    table_rows integer NOT NULL DEFAULT 0,
+    row_count integer NOT NULL DEFAULT 0,
+    rule_count integer NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_structure_check_log_zip ON structure_check_log (zip_name, table_name);`)
+  await recordInit(db, 'app', APP_SCHEMA_VERSION, 2, 0)
+  return { version: APP_SCHEMA_VERSION, table_count: 2, row_count: 0, applied: true }
 }
 
 /** One row per import run, newest first. The history is append-only: nothing here deletes it. */
@@ -166,6 +313,283 @@ export async function listImportLog(db: PGlite, limit = 200): Promise<ImportLogE
     FROM import52files_log ORDER BY started_at DESC, id DESC LIMIT $1
   `, [limit])
   return rows
+}
+
+interface DictionaryColumn { table: string; column: string; type: string; width: number; required: boolean }
+interface RuleTest { column: string; rule: string; detail: string; level: string; test: string }
+
+/** Every rule the dictionary puts on one column, as SQL that is true when a row breaks it. */
+function ruleTests(entry: DictionaryColumn): RuleTest[] {
+  const target = quote(entry.column)
+  const tests: RuleTest[] = []
+  if (entry.required) {
+    tests.push({ column: entry.column, rule: 'required', detail: 'ห้ามเป็นค่าว่าง', level: 'error', test: `${target} = ''` })
+  }
+  if (entry.width > 0) {
+    tests.push({ column: entry.column, rule: 'width', detail: `ความยาวเกิน ${entry.width} อักขระ`, level: 'error', test: `char_length(${target}) > ${entry.width}` })
+  }
+  if (entry.type === 'N') {
+    tests.push({ column: entry.column, rule: 'number', detail: 'ต้องเป็นตัวเลข', level: 'warning', test: `${target} <> '' AND ${target} !~ '^-?[0-9]+([.][0-9]+)?$'` })
+  }
+  if ((entry.type === 'D' || entry.type === 'DT') && entry.width > 0) {
+    tests.push({ column: entry.column, rule: 'date', detail: `รูปแบบต้องเป็นตัวเลข ${entry.width} หลัก`, level: 'error', test: `${target} <> '' AND ${target} !~ '^[0-9]{${entry.width}}$'` })
+  }
+  return tests
+}
+
+/** The rows a zip brought in, for scoping every structure query to that file. */
+const importedFromZip = 'log_import_id IN (SELECT id FROM import52files_log WHERE file_name = $1)'
+
+
+/**
+ * Checks the rows imported from one zip against the real 43-file data dictionary
+ * (`c_files_schema`): required fields, declared width, numeric fields and date formats.
+ * Scope is the zip file name, so every run that imported that file counts — re-importing the
+ * same zip adds no rows, and the check still sees the rows the first run brought in.
+ * The result replaces the zip's previous one in `structure_check_log`.
+ */
+export async function checkImportStructure(db: PGlite, zipName: string,
+  structure: FileStructure = fileStructure as FileStructure): Promise<StructureCheckResult> {
+  const dictionary = await db.query<DictionaryColumn>(`
+    SELECT LOWER(table_name) AS table, LOWER(name) AS column, type,
+      -- width is usually plain digits, but the dictionary has the odd '13.00'
+      CASE WHEN width ~ '^[0-9]+' THEN SPLIT_PART(width, '.', 1)::int ELSE 0 END AS width,
+      not_null = 'Y' AS required
+    FROM c_files_schema WHERE is_active = 1`)
+  const byTable = new Map<string, DictionaryColumn[]>()
+  for (const entry of dictionary.rows) {
+    if (!byTable.has(entry.table)) byTable.set(entry.table, [])
+    byTable.get(entry.table)!.push(entry)
+  }
+
+  const findings: StructureFinding[] = []
+  let rows = 0
+  let rules = 0
+  for (const table of structure.tables) {
+    const columns = (byTable.get(table.name) ?? [])
+      .filter((entry) => table.columns.some((column) => column.name === entry.column))
+    if (!columns.length) continue
+
+    const checks = columns.flatMap(ruleTests)
+    if (!checks.length) continue
+
+    const counters = checks.map((check, index) => `SUM(CASE WHEN ${check.test} THEN 1 ELSE 0 END)::int AS c${index}`)
+    const { rows: result } = await db.query<Record<string, number>>(
+      `SELECT COUNT(*)::int AS total, ${counters.join(', ')} FROM ${quote(table.name)} WHERE ${importedFromZip}`, [zipName])
+    const summary = result[0]
+    if (!summary || !summary.total) continue
+    rows += summary.total
+    rules += checks.length
+    checks.forEach((check, index) => {
+      const found = summary[`c${index}`] ?? 0
+      if (found > 0) findings.push({ tableName: table.name, columnName: check.column, rule: check.rule, detail: check.detail, tableRows: summary.total, found, level: check.level })
+    })
+  }
+
+  await db.query('DELETE FROM structure_check_log WHERE zip_name = $1', [zipName])
+  const stored = findings.length ? findings : [
+    { tableName: '', columnName: '', rule: 'passed', detail: 'ผ่านทุกเกณฑ์', tableRows: 0, found: 0, level: 'passed' },
+  ]
+  const values: unknown[] = []
+  const placeholders = stored.map((finding) => {
+    values.push(zipName, finding.tableName, finding.columnName, finding.rule, finding.detail,
+      finding.tableRows, finding.found, finding.level, rows, rules)
+    const start = values.length - 10
+    return `(${Array.from({ length: 10 }, (_unused, offset) => `$${start + offset + 1}`).join(', ')})`
+  })
+  await db.query(`INSERT INTO structure_check_log
+    (zip_name, table_name, column_name, rule, detail, table_rows, found, level, row_count, rule_count)
+    VALUES ${placeholders.join(', ')}`, values)
+
+  return await structureResult(db, zipName) ?? { zipName, rows, rules, checkedAt: new Date().toISOString(), findings }
+}
+
+/**
+ * The actual rows behind one finding: the file's key columns plus the offending value, so the
+ * finding can be traced back to real records. Capped to a readable sample.
+ */
+export async function structureFailingRows(db: PGlite, zipName: string, tableName: string,
+  columnName: string, rule: string, limit = 100,
+  structure: FileStructure = fileStructure as FileStructure): Promise<FailingRows> {
+  const definition = structure.tables.find((entry) => entry.name === tableName)
+  if (!definition) throw new Error(`ไม่รู้จักแฟ้ม ${tableName}`)
+  const { rows: dictionary } = await db.query<DictionaryColumn>(`
+    SELECT LOWER(table_name) AS table, LOWER(name) AS column, type,
+      CASE WHEN width ~ '^[0-9]+' THEN SPLIT_PART(width, '.', 1)::int ELSE 0 END AS width,
+      not_null = 'Y' AS required
+    FROM c_files_schema
+    WHERE is_active = 1 AND LOWER(table_name) = $1 AND LOWER(name) = $2`, [tableName, columnName])
+  const test = dictionary.flatMap(ruleTests).find((entry) => entry.rule === rule)
+  if (!test) throw new Error(`ไม่รู้จักเกณฑ์ ${rule} ของ ${tableName}.${columnName}`)
+
+  // Standing columns first, so a row can always be traced back: who, which visit, and when.
+  // `seq` identifies an outpatient visit and `an` an admission; `service` for one has a primary key
+  // of (hospcode, seq, date_serv) — no pid — so the keys alone are not enough to recognise a record.
+  const standing = ['hospcode', 'pid', 'seq', 'an', countingColumn(definition)]
+    .filter((name) => definition.columns.some((column) => column.name === name))
+  const shown = [...new Set([...standing, ...definition.primaryKey, columnName])]
+  const { rows: sample } = await db.query<Record<string, string>>(
+    `SELECT ${shown.map(quote).join(', ')} FROM ${quote(tableName)}
+     WHERE ${importedFromZip} AND ${test.test} LIMIT ${limit}`, [zipName])
+  const { rows: counted } = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM ${quote(tableName)} WHERE ${importedFromZip} AND ${test.test}`, [zipName])
+  return {
+    tableName,
+    columnName,
+    detail: test.detail,
+    columns: shown,
+    rows: sample.map((row) => shown.map((name) => String(row[name] ?? ''))),
+    total: counted[0]?.n ?? 0,
+  }
+}
+
+/** The stored result of the last structure check of a zip. */
+export async function structureResult(db: PGlite, zipName: string): Promise<StructureCheckResult | null> {
+  const { rows } = await db.query<{
+    tableName: string; columnName: string; rule: string; detail: string; tableRows: number
+    found: number; level: string; rowCount: number; ruleCount: number; checkedAt: string
+  }>(`SELECT table_name AS "tableName", column_name AS "columnName", rule, detail,
+        table_rows AS "tableRows", found, level,
+        row_count AS "rowCount", rule_count AS "ruleCount", checked_at AS "checkedAt"
+      FROM structure_check_log WHERE zip_name = $1
+      ORDER BY CASE level WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, found DESC, table_name, column_name`,
+    [zipName])
+  if (!rows.length) return null
+  return {
+    zipName,
+    rows: rows[0].rowCount,
+    rules: rows[0].ruleCount,
+    checkedAt: rows[0].checkedAt,
+    findings: rows.filter((row) => row.rule !== 'passed').map(({ tableName, columnName, rule, detail, tableRows, found, level }) =>
+      ({ tableName, columnName, rule, detail, tableRows, found, level })),
+  }
+}
+
+/**
+ * The date each file is counted by: its own service/event date when it has one, otherwise the
+ * `d_update` column that all 52 files carry. Values are `YYYYMMDD` or `YYYYMMDDHHMMSS` in CE.
+ */
+function countingColumn(table: FileTable) {
+  const dated = table.columns.find((column) => /^date(time)?_/i.test(column.name))
+  return dated?.name ?? 'd_update'
+}
+
+/**
+ * Row counts of one standard file for each Thai fiscal year given, October through September.
+ * Fiscal 2569 runs from October 2568 (CE 2025-10) to September 2569 (CE 2026-09).
+ */
+export async function countByFiscalYears(db: PGlite, table: string, years: number[],
+  structure: FileStructure = fileStructure as FileStructure): Promise<DataCountResult> {
+  const definition = structure.tables.find((entry) => entry.name === table)
+  if (!definition) throw new Error(`ไม่รู้จักแฟ้ม ${table}`)
+  const column = countingColumn(definition)
+  if (!years.length) return { table, column, years: [] }
+
+  const from = `${Math.min(...years) - 544}10`
+  const to = `${Math.max(...years) - 543}09`
+  const { rows } = await db.query<{ ym: string; n: number }>(`
+    SELECT LEFT(${quote(column)}, 6) AS ym, COUNT(*)::int AS n
+    FROM ${quote(table)}
+    WHERE LEFT(${quote(column)}, 6) BETWEEN $1 AND $2
+    GROUP BY 1`, [from, to])
+  const found = new Map(rows.map((row) => [row.ym, row.n]))
+
+  return {
+    table,
+    column,
+    years: [...years].sort((first, second) => second - first).map((fiscalYear) => {
+      const months = Array.from({ length: 12 }, (_unused, index) => {
+        const month = ((9 + index) % 12) + 1
+        const year = index < 3 ? fiscalYear - 544 : fiscalYear - 543
+        return found.get(`${year}${String(month).padStart(2, '0')}`) ?? 0
+      })
+      return { fiscalYear, months, total: months.reduce((sum, count) => sum + count, 0) }
+    }),
+  }
+}
+
+/** Opens a run in the import history and returns its id, which stamps every row it brings in. */
+export async function startImportRun(db: PGlite, file: { name: string; path: string; size: number }) {
+  const { rows } = await db.query<{ id: number }>(`
+    INSERT INTO import52files_log (file_name, file_path, file_size, status, progress_percent)
+    VALUES ($1, $2, $3, 'running', 0) RETURNING id::int AS id`, [file.name, file.path, file.size])
+  return rows[0].id
+}
+
+export async function finishImportRun(db: PGlite, id: number,
+  result: { status: 'complete' | 'failed'; rowCount: number; message: string }) {
+  await db.query(`UPDATE import52files_log
+    SET status = $2, row_count = $3, message = $4, finished_at = now(),
+        progress_percent = CASE WHEN $2 = 'complete' THEN 100 ELSE progress_percent END
+    WHERE id = $1`, [id, result.status, result.rowCount, result.message])
+}
+
+export async function updateImportProgress(db: PGlite, id: number, percent: number, rowCount: number) {
+  await db.query('UPDATE import52files_log SET progress_percent = $2, row_count = $3 WHERE id = $1',
+    [id, percent, rowCount])
+}
+
+/**
+ * Loads one standard file's rows into its table. Columns are matched by header name, so an export
+ * with fewer (or extra) columns than the mirrored structure still works; unknown headers are
+ * ignored and missing ones keep their default. Every row is stamped with the import run id.
+ * Rows that clash with an existing primary key are skipped, so re-importing a file is safe.
+ */
+export async function insertStandardRows(db: PGlite, runId: number, table: string,
+  header: string[], rows: string[][], structure: FileStructure = fileStructure as FileStructure) {
+  if (!rows.length) return 0
+  const definition = structure.tables.find((entry) => entry.name === table)
+  if (!definition) return 0
+  const known = new Map(definition.columns.map((column) => [column.name.toLowerCase(), column]))
+  const mapped = header
+    .map((name, index) => ({ column: known.get(name.trim().toLowerCase()), index }))
+    .filter((entry): entry is { column: FileColumn; index: number } => Boolean(entry.column))
+  if (!mapped.length) return 0
+
+  const names = [...mapped.map((entry) => entry.column.name), 'log_import_id']
+  const cell = (entry: { column: FileColumn; index: number }, row: string[]) => {
+    const raw = row[entry.index] ?? ''
+    const length = entry.column.type === 'varchar' ? entry.column.length : null
+    return length && raw.length > length ? raw.slice(0, length) : raw
+  }
+
+  // A newer file wins: rows that already exist are overwritten, not skipped, and re-stamped with
+  // the run that brought them in. Files with no primary key have nothing to match on, so they can
+  // only be appended.
+  const keyed = definition.primaryKey.length
+    && definition.primaryKey.every((key) => mapped.some((entry) => entry.column.name === key))
+  const updatable = names.filter((name) => !definition.primaryKey.includes(name))
+  const conflict = keyed
+    ? `ON CONFLICT (${definition.primaryKey.map(quote).join(', ')}) DO UPDATE SET `
+      + updatable.map((name) => `${quote(name)} = EXCLUDED.${quote(name)}`).join(', ')
+    : 'ON CONFLICT DO NOTHING'
+
+  // One statement may not touch the same row twice, so a duplicated key inside the file keeps its
+  // last occurrence — the same "newer wins" rule, applied within the file.
+  let incoming = rows
+  if (keyed) {
+    const byKey = new Map<string, string[]>()
+    const keyIndexes = definition.primaryKey.map((key) => mapped.find((entry) => entry.column.name === key)!)
+    for (const row of rows) byKey.set(keyIndexes.map((entry) => cell(entry, row)).join('|'), row)
+    incoming = [...byKey.values()]
+  }
+
+  const target = `INSERT INTO ${quote(table)} (${names.map(quote).join(', ')}) VALUES `
+  const perBatch = Math.max(1, Math.floor(5000 / names.length))
+  let written = 0
+  for (let index = 0; index < incoming.length; index += perBatch) {
+    const batch = incoming.slice(index, index + perBatch)
+    const values: unknown[] = []
+    const placeholders = batch.map((row) => {
+      const slots = mapped.map((entry) => { values.push(cell(entry, row)); return `$${values.length}` })
+      values.push(runId)
+      slots.push(`$${values.length}`)
+      return `(${slots.join(', ')})`
+    })
+    const result = await db.query(`${target}${placeholders.join(', ')} ${conflict}`, values)
+    written += result.affectedRows ?? 0
+  }
+  return written
 }
 
 function postgresType(mysqlType: string) {
@@ -216,14 +640,46 @@ export async function loadReferenceTables(db: PGlite, data: ReferenceData = refe
   return { version, table_count: data.tables.length, row_count: total, applied: true }
 }
 
+/**
+ * Our own revision of the 52-table schema, on top of whatever SUB-HDC structure file is in use.
+ * Bump it when the DDL below changes so the change is applied once on the next start.
+ */
+const FILES_SCHEMA_REVISION = 4
+
+/**
+ * `log_import_id` is SUB-HDC's own column on every one of the 52 files, and PlkGap uses it as a
+ * plain stamp: the id of the `import52files_log` run a row came from, joined on demand.
+ * Deliberately no foreign key and no index — nothing to slow a bulk import down.
+ * Revision 2 briefly added both, so they are dropped here for databases that already got them.
+ */
+async function unlinkImportLog(db: PGlite, table: FileTable) {
+  if (!table.columns.some((column) => column.name === 'log_import_id')) return
+  await db.exec(`ALTER TABLE ${quote(table.name)} DROP CONSTRAINT IF EXISTS ${quote(`${table.name}_log_import_id_fkey`)};
+    DROP INDEX IF EXISTS ${quote(`idx_${table.name}_log_import_id`)};`)
+}
+
+function fileColumnType(column: FileColumn) {
+  if (column.type === 'varchar' && column.length) return `varchar(${column.length})`
+  if (column.type === 'int') return 'integer'
+  if (column.type === 'bigint') return 'bigint'
+  return 'text'
+}
+
+/**
+ * MariaDB reports defaults as expressions: "''" for the empty string, "NULL" for none.
+ * SUB-HDC has one NOT NULL text column with no default at all (`service.chiefcomp`); MySQL lets an
+ * insert omit it, PostgreSQL does not, so give every NOT NULL text column the same empty default.
+ */
+function fileColumnDefault(column: FileColumn) {
+  if (column.default && column.default !== 'NULL') return column.default
+  if (!column.nullable && fileColumnType(column) !== 'integer' && fileColumnType(column) !== 'bigint') return "''"
+  return null
+}
+
 function fileColumnDefinition(column: FileColumn) {
-  const type = column.type === 'varchar' && column.length ? `varchar(${column.length})`
-    : column.type === 'int' ? 'integer'
-    : column.type === 'bigint' ? 'bigint'
-    : 'text'
-  // MariaDB reports defaults as expressions: "''" for the empty string, "NULL" for none.
-  const fallback = column.default && column.default !== 'NULL' ? ` DEFAULT ${column.default}` : ''
-  return `${quote(column.name)} ${type}${column.nullable ? '' : ' NOT NULL'}${fallback}`
+  const fallback = fileColumnDefault(column)
+  return `${quote(column.name)} ${fileColumnType(column)}${column.nullable ? '' : ' NOT NULL'}`
+    + (fallback ? ` DEFAULT ${fallback}` : '')
 }
 
 /**
@@ -235,7 +691,8 @@ function fileColumnDefinition(column: FileColumn) {
  */
 export async function createFileTables(db: PGlite, structure: FileStructure = fileStructure as FileStructure) {
   await ensureInitTable(db)
-  const version = versionOf(structure)
+  await createAppTables(db)
+  const version = `${versionOf(structure)}#${FILES_SCHEMA_REVISION}`
   const done = await initializedVersion(db, 'files43')
   if (done?.version === version) return { ...done, applied: false, created: 0 }
 
@@ -248,6 +705,10 @@ export async function createFileTables(db: PGlite, structure: FileStructure = fi
       // A newer structure file may add columns to a table that already holds imported rows.
       for (const column of table.columns) {
         await db.exec(`ALTER TABLE ${quote(table.name)} ADD COLUMN IF NOT EXISTS ${fileColumnDefinition(column)};`)
+        const fallback = fileColumnDefault(column)
+        if (fallback) {
+          await db.exec(`ALTER TABLE ${quote(table.name)} ALTER COLUMN ${quote(column.name)} SET DEFAULT ${fallback};`)
+        }
       }
     } else {
       created += 1
@@ -259,6 +720,7 @@ export async function createFileTables(db: PGlite, structure: FileStructure = fi
       await db.exec(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${quote(index.name)}
         ON ${quote(table.name)} (${index.columns.map(quote).join(', ')});`)
     }
+    await unlinkImportLog(db, table)
   }
   await recordInit(db, 'files43', version, structure.tables.length, 0)
   return { version, table_count: structure.tables.length, row_count: 0, created, applied: true }

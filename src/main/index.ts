@@ -1,7 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
-import { join } from 'node:path'
-import { databaseStatus, findHospital, listImportLog, listStandardFiles, openDatabase } from './database'
-import { checkImportZip } from './importFiles'
+import { basename, join } from 'node:path'
+import { stat } from 'node:fs/promises'
+import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listStandardFiles, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
+import { checkImportZip, eachZipTextEntry, parsePipeFile } from './Import52Files'
 import type { IpcMainInvokeEvent } from 'electron'
 
 let window: BrowserWindow | null = null
@@ -103,7 +104,7 @@ if (!app.requestSingleInstanceLock()) {
       return findHospital(db!, String(hospcode ?? ''))
     })
     // Where the 43-file zips are dropped. Tests redirect it so they never read the real Desktop.
-    const importDirectory = () => process.env.PLKGAP_IMPORT_DIR ?? app.getPath('desktop')
+    const importDirectory = () => process.env.PLKGAP_IMPORT_DIR ?? join(app.getPath('desktop'), 'Zip')
     ipcMain.handle('import:choose-file', async (event) => {
       const target = authorizedWindow(event)
       const result = await dialog.showOpenDialog(target, {
@@ -114,6 +115,35 @@ if (!app.requestSingleInstanceLock()) {
       })
       return result.canceled ? null : result.filePaths[0] ?? null
     })
+    ipcMain.handle('geo:boundaries', (event, level: unknown) => {
+      authorizedWindow(event)
+      return listBoundaries(db!, String(level ?? '') as Parameters<typeof listBoundaries>[1])
+    })
+    ipcMain.handle('home:list', (event) => {
+      authorizedWindow(event)
+      return listHouseholds(db!)
+    })
+    ipcMain.handle('files:list', (event) => {
+      authorizedWindow(event)
+      return listStandardFiles(db!)
+    })
+    ipcMain.handle('files:count-by-year', async (event, table: unknown, years: unknown) => {
+      authorizedWindow(event)
+      const list = Array.isArray(years) ? years.map(Number).filter(Number.isFinite) : []
+      return countByFiscalYears(db!, String(table ?? ''), list)
+    })
+    ipcMain.handle('structure:check', (event, zipName: unknown) => {
+      authorizedWindow(event)
+      return checkImportStructure(db!, String(zipName ?? ''))
+    })
+    ipcMain.handle('structure:result', (event, zipName: unknown) => {
+      authorizedWindow(event)
+      return structureResult(db!, String(zipName ?? ''))
+    })
+    ipcMain.handle('structure:failing-rows', (event, zipName: unknown, tableName: unknown, columnName: unknown, rule: unknown) => {
+      authorizedWindow(event)
+      return structureFailingRows(db!, String(zipName ?? ''), String(tableName ?? ''), String(columnName ?? ''), String(rule ?? ''))
+    })
     ipcMain.handle('import:log', (event) => {
       authorizedWindow(event)
       return listImportLog(db!)
@@ -121,6 +151,37 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('import:check-file', async (event, path: unknown) => {
       authorizedWindow(event)
       return checkImportZip(String(path ?? ''), await listStandardFiles(db!))
+    })
+    ipcMain.handle('import:run', async (event, path: unknown) => {
+      const target = authorizedWindow(event)
+      const file = String(path ?? '')
+      const standard = await listStandardFiles(db!)
+      const check = await checkImportZip(file, standard)
+      if (!check.valid) throw new Error(check.error || 'ไฟล์นี้ไม่ใช่ชุด 52 แฟ้ม จึงนำเข้าไม่ได้')
+      const runId = await startImportRun(db!, {
+        name: basename(file),
+        path: file,
+        size: (await stat(file)).size,
+      })
+      let files = 0
+      let rowCount = 0
+      try {
+        await eachZipTextEntry(file, async (entry, text) => {
+          const table = basename(entry).replace(/\.[^.]*$/, '').toLowerCase()
+          if (!standard.includes(table)) return
+          const parsed = parsePipeFile(text)
+          rowCount += await insertStandardRows(db!, runId, table, parsed.header, parsed.rows)
+          files += 1
+          const percent = Math.round((files / standard.length) * 100)
+          await updateImportProgress(db!, runId, percent, rowCount)
+          if (!target.isDestroyed()) target.webContents.send('import:progress', { runId, percent, file: table, rowCount })
+        })
+      } catch (reason: unknown) {
+        await finishImportRun(db!, runId, { status: 'failed', rowCount, message: String(reason) })
+        throw reason
+      }
+      await finishImportRun(db!, runId, { status: 'complete', rowCount, message: '' })
+      return { runId, files, rowCount }
     })
     createWindow()
     app.on('activate', () => {
@@ -141,8 +202,16 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('database:status')
     ipcMain.removeHandler('hospital:find')
     ipcMain.removeHandler('import:choose-file')
+    ipcMain.removeHandler('geo:boundaries')
+    ipcMain.removeHandler('home:list')
+    ipcMain.removeHandler('files:list')
+    ipcMain.removeHandler('files:count-by-year')
+    ipcMain.removeHandler('structure:check')
+    ipcMain.removeHandler('structure:result')
+    ipcMain.removeHandler('structure:failing-rows')
     ipcMain.removeHandler('import:log')
     ipcMain.removeHandler('import:check-file')
+    ipcMain.removeHandler('import:run')
     void db.close().catch(console.error).finally(() => app.exit())
   })
 }

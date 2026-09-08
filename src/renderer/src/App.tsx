@@ -3,7 +3,8 @@ import type { KeyboardEvent, PointerEvent } from 'react'
 import type { DatabaseStatus } from '../../shared/api'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
-import { Import52FilePage } from './pages/files43/Import52FilePage'
+import { Import52Files } from './pages/files43/Import52Files'
+import { DataCount } from './pages/files43/DataCount'
 import { StructureCheckPage } from './pages/files43/StructureCheckPage'
 import { StandardCheckPage } from './pages/files43/StandardCheckPage'
 import { IndicatorTemplatePage } from './pages/analytics/IndicatorTemplatePage'
@@ -19,7 +20,7 @@ import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
 type Kind =
-  | 'import' | 'structure-check' | 'standard-check'
+  | 'import' | 'data-count' | 'structure-check' | 'standard-check'
   | 'kpi-template' | 'revenue-template'
   | 'household-map'
   | 'line-morprom'
@@ -28,10 +29,11 @@ type Kind =
   | 'developers'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
 type Item = { label: string; action: () => void; disabled?: boolean; hint?: string }
-type Group = { id: string; label: string; icon: IconName; items: Kind[] }
+type Group = { id: string; label: string; icon: IconName; collapsed?: boolean; items: Kind[] }
 
 const titles: Record<Kind, string> = {
   import: 'นำเข้าข้อมูล',
+  'data-count': 'ปริมาณข้อมูล',
   'structure-check': 'ตรวจตามโครงสร้าง',
   'standard-check': 'ตรวจตามหลักวิชาการ',
   'kpi-template': 'เทมเพลตตัวชี้วัด',
@@ -46,6 +48,7 @@ const titles: Record<Kind, string> = {
 }
 const icons: Record<Kind, IconName> = {
   import: 'upload',
+  'data-count': 'counter',
   'structure-check': 'structure',
   'standard-check': 'book',
   'kpi-template': 'gauge',
@@ -60,7 +63,8 @@ const icons: Record<Kind, IconName> = {
 }
 // Basename of the page component that renders each Kind — shown after the title in window chrome.
 const sources: Record<Kind, string> = {
-  import: 'Import52FilePage',
+  import: 'Import52Files',
+  'data-count': 'DataCount',
   'structure-check': 'StructureCheckPage',
   'standard-check': 'StandardCheckPage',
   'kpi-template': 'IndicatorTemplatePage',
@@ -75,12 +79,12 @@ const sources: Record<Kind, string> = {
 }
 const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
 const groups: Group[] = [
-  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'standard-check'] },
+  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'data-count', 'structure-check', 'standard-check'] },
   { id: 'analytics', label: 'ระบบวิเคราะห์ข้อมูล', icon: 'chart', items: ['kpi-template', 'revenue-template'] },
   { id: 'mapping', label: 'ระบบแผนที่', icon: 'map', items: ['household-map'] },
   { id: 'messaging', label: 'ระบบสื่อสาร', icon: 'message', items: ['line-morprom'] },
-  { id: 'epidemiology', label: 'ระบบระบาดวิทยาและควบคุมโรค', icon: 'activity', items: ['dengue'] },
-  { id: 'settings', label: 'ตั้งค่า', icon: 'settings', items: ['service-unit', 'subhdc', 'plk-dashboard'] },
+  { id: 'epidemiology', label: 'งานระบาดวิทยาควบคุมโรค', icon: 'activity', items: ['dengue'] },
+  { id: 'settings', label: 'ตั้งค่า', icon: 'settings', collapsed: true, items: ['service-unit', 'subhdc', 'plk-dashboard'] },
 ]
 const flushPages: Kind[] = ['household-map']
 
@@ -209,12 +213,13 @@ export function App() {
     </div>
     </TitleBar>
     <div className="desktop-body">
-      <Sidebar activeId={active?.id} groups={groups.map((group) => ({ id: group.id, label: group.label, icon: group.icon, items: group.items.map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) })) }))} />
+      <Sidebar activeId={active?.id} groups={groups.map((group) => ({ id: group.id, label: group.label, icon: group.icon, collapsed: group.collapsed, items: group.items.map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) })) }))} />
     <div className="workspace" ref={workspace} aria-label="MDI workspace">
       {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
         <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
         <div className={flushPages.includes(item.id) ? 'window-content flush' : 'window-content'}>
-          {item.id === 'import' && <Import52FilePage />}
+          {item.id === 'import' && <Import52Files />}
+          {item.id === 'data-count' && <DataCount />}
           {item.id === 'structure-check' && <StructureCheckPage />}
           {item.id === 'standard-check' && <StandardCheckPage />}
           {item.id === 'kpi-template' && <IndicatorTemplatePage />}
