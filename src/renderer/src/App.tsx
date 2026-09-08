@@ -79,7 +79,7 @@ const sources: Record<Kind, string> = {
 }
 const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
 const groups: Group[] = [
-  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'data-count', 'structure-check', 'standard-check'] },
+  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'standard-check', 'data-count'] },
   { id: 'analytics', label: 'ระบบวิเคราะห์ข้อมูล', icon: 'chart', items: ['kpi-template', 'revenue-template'] },
   { id: 'mapping', label: 'ระบบแผนที่', icon: 'map', items: ['household-map'] },
   { id: 'messaging', label: 'ระบบสื่อสาร', icon: 'message', items: ['line-morprom'] },
