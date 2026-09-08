@@ -71,8 +71,8 @@ export interface DataCountYear {
 export interface DataCountResult {
   table: string
   column: string
-  /** แฟ้มสะสม — counted by `d_update`, so only the fiscal-year totals mean anything. */
-  cumulative: boolean
+  /** True when the file records activity on a date of its own, so a month-by-month split is real. */
+  byMonth: boolean
   years: DataCountYear[]
 }
 
@@ -102,6 +102,8 @@ export interface FailingRows {
 export type ObservationRuleId = 'service-after-death' | 'thai-cid-mod11' | 'prename-sex'
   | 'birth-in-future' | 'service-before-birth' | 'death-before-birth'
   | 'diagnosis-without-service' | 'drug-without-service'
+  | 'service-without-person' | 'person-without-home' | 'duplicate-cid'
+  | 'death-without-discharge' | 'discharge-before-admit'
 /** `error` when the rows cannot all be true at once, `warning` when a human should judge. */
 export type ObservationLevel = 'error' | 'warning'
 /** One row of the `observ_check` register: what a rule is called and whether it runs. */

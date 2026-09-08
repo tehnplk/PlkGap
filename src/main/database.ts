@@ -169,7 +169,9 @@ export async function initializeSchema(db: PGlite, data: {
   const app = await createAppTables(db)
   const observations = await syncObservationRules(db)
   const files = await createFileTables(db, data.structure)
-  return { reference, geography, files, app, observations,
+  // Last: the masked views mirror whatever tables the steps above ended up creating.
+  const api = await createApiSchema(db)
+  return { reference, geography, files, app, observations, api,
     firstRun: reference.applied || geography.applied || files.applied || app.applied }
 }
 
@@ -473,6 +475,16 @@ function validObservationDate(value: string) {
 }
 
 /**
+ * The same for a `datetime_*` column, which the 43 files write as `YYYYMMDDHHMMSS` — though a
+ * unit that only knows the day writes eight digits, so both lengths count as usable.
+ * Only the date half is validated, so compare two stamps on `left(value, 8)`: a plain string
+ * comparison of a 14-digit stamp against an 8-digit one would be meaningless.
+ */
+function validObservationStamp(value: string) {
+  return `(${value} ~ '^[0-9]{8}([0-9]{6})?$' AND ${validObservationDate(`left(${value}, 8)`)})`
+}
+
+/**
  * Every observation rule the app can run. `level` is `error` when the rows cannot be true at once
  * and `warning` when they merely look wrong and a human should judge.
  * The register table `observ_check` is seeded from this list — see syncObservationRules().
@@ -553,6 +565,55 @@ function observationRules(): {
           AND s.seq = r.seq AND s.date_serv = r.date_serv) AS failed
         FROM ${tableName} r WHERE r.${importedFromZip}`,
     })),
+    {
+      id: 'service-without-person', tableName: 'service', level: 'error',
+      detail: 'SERVICE ไม่มีตัวตนใน PERSON (HOSPCODE, PID)',
+      columns: ['hospcode', 'pid', 'seq', 'date_serv'],
+      sql: `SELECT s.hospcode, s.pid, s.seq, s.date_serv,
+        (btrim(s.hospcode) <> '' AND btrim(s.pid) <> '') AS eligible,
+        NOT EXISTS (SELECT 1 FROM person p WHERE p.hospcode = s.hospcode AND p.pid = s.pid) AS failed
+        FROM service s WHERE s.${importedFromZip}`,
+    },
+    {
+      id: 'person-without-home', tableName: 'person', level: 'error',
+      detail: 'คนในเขตรับผิดชอบอ้าง HID ที่ไม่มีในแฟ้ม HOME',
+      columns: ['hospcode', 'pid', 'hid', 'typearea'],
+      // TYPEAREA 4 and 5 live outside the catchment area, so they are not expected to have a house.
+      sql: `SELECT p.hospcode, p.pid, p.hid, p.typearea,
+        (p.typearea IN ('1', '2', '3') AND btrim(p.hid) NOT IN ('', '0')) AS eligible,
+        NOT EXISTS (SELECT 1 FROM home h WHERE h.hospcode = p.hospcode AND h.hid = p.hid) AS failed
+        FROM person p WHERE p.${importedFromZip}`,
+    },
+    {
+      id: 'duplicate-cid', tableName: 'person', level: 'error',
+      detail: 'เลขบัตรประชาชนเดียวกันถูกใช้หลาย PID ในหน่วยบริการเดียวกัน',
+      columns: ['hospcode', 'pid', 'cid', 'name', 'lname'],
+      // Counted inside the zip only: a PID registered twice across separate imports is not seen here.
+      sql: `SELECT p.hospcode, p.pid, p.cid, p.name, p.lname,
+        (p.cid ~ '^[0-9]{13}$') AS eligible,
+        COUNT(*) FILTER (WHERE p.cid ~ '^[0-9]{13}$')
+          OVER (PARTITION BY p.hospcode, p.cid) > 1 AS failed
+        FROM person p WHERE p.${importedFromZip}`,
+    },
+    {
+      id: 'death-without-discharge', tableName: 'death', level: 'error',
+      detail: 'มีในแฟ้ม DEATH แต่ PERSON ไม่ได้จำหน่าย "ตาย" หรือวันที่ไม่ตรงกัน',
+      columns: ['hospcode', 'pid', 'ddeath', 'discharge', 'ddischarge'],
+      sql: `SELECT d.hospcode, d.pid, d.ddeath, p.discharge, p.ddischarge,
+        (${validObservationDate('d.ddeath')} AND p.pid IS NOT NULL) AS eligible,
+        (p.discharge <> '1' OR p.ddischarge <> d.ddeath) AS failed
+        FROM death d LEFT JOIN person p ON p.hospcode = d.hospcode AND p.pid = d.pid
+        WHERE d.${importedFromZip}`,
+    },
+    {
+      id: 'discharge-before-admit', tableName: 'admission', level: 'error',
+      detail: 'วันจำหน่ายก่อนวันรับไว้นอนโรงพยาบาล',
+      columns: ['hospcode', 'pid', 'an', 'datetime_admit', 'datetime_disch'],
+      sql: `SELECT a.hospcode, a.pid, a.an, a.datetime_admit, a.datetime_disch,
+        (${validObservationStamp('a.datetime_admit')} AND ${validObservationStamp('a.datetime_disch')}) AS eligible,
+        (left(a.datetime_disch, 8) < left(a.datetime_admit, 8)) AS failed
+        FROM admission a WHERE a.${importedFromZip}`,
+    },
   ]
 }
 
@@ -660,10 +721,27 @@ export async function structureResult(db: PGlite, zipName: string): Promise<Stru
 /**
  * The date each file is counted by: its own service/event date when it has one, otherwise the
  * `d_update` column that all 52 files carry. Values are `YYYYMMDD` or `YYYYMMDDHHMMSS` in CE.
+ * Matched on the column name because the data dictionary cannot be trusted for this: it types
+ * `clinical_refer.datetime_assess` and `drug_refer.datetime_dstart` as plain text, and does not
+ * list `icf.date_serv` at all. So a file whose date is named otherwise (`procedure_refer.timestart`,
+ * `death.ddeath`, `newborn.bdate`) still falls back to `d_update` and is reported by year only.
  */
 function countingColumn(table: FileTable) {
   const dated = table.columns.find((column) => /^date(time)?_/i.test(column.name))
   return dated?.name ?? 'd_update'
+}
+
+/**
+ * แฟ้มสะสม as the 43-file manual marks it. `c_files_desc.description` carries the file's own
+ * "□/☑ แฟ้มสะสม  □/☑ แฟ้มบริการ  □/☑ แฟ้มบริการกึ่งสำรวจ" line, and it is the only place upstream
+ * says which kind a file is — `c_file.type` is null for all 52. DATA_CORRECT carries no such line
+ * and counts as not cumulative.
+ */
+async function isCumulativeFile(db: PGlite, table: string) {
+  const { rows } = await db.query<{ cumulative: boolean }>(
+    `SELECT description ~ '☑\\s*แฟ้มสะสม' AS cumulative
+     FROM c_files_desc WHERE LOWER(table_name) = $1 AND is_active = 1 LIMIT 1`, [table])
+  return rows[0]?.cumulative ?? false
 }
 
 /**
@@ -675,10 +753,11 @@ export async function countByFiscalYears(db: PGlite, table: string, years: numbe
   const definition = structure.tables.find((entry) => entry.name === table)
   if (!definition) throw new Error(`ไม่รู้จักแฟ้ม ${table}`)
   const column = countingColumn(definition)
-  // แฟ้มสะสม carries no service date of its own, so it falls back to `d_update` — the month a row
-  // was last edited is not a month of activity, so those files are reported by fiscal year only.
-  const cumulative = column === 'd_update'
-  if (!years.length) return { table, column, cumulative, years: [] }
+  // A month only means something for a file that records activity and has a date of its own:
+  // แฟ้มสะสม is a standing register, and `d_update` says when a row was last edited, not when
+  // anything happened. Everything else is reported by fiscal year alone.
+  const byMonth = column !== 'd_update' && !await isCumulativeFile(db, table)
+  if (!years.length) return { table, column, byMonth, years: [] }
 
   const from = `${Math.min(...years) - 544}10`
   const to = `${Math.max(...years) - 543}09`
@@ -692,7 +771,7 @@ export async function countByFiscalYears(db: PGlite, table: string, years: numbe
   return {
     table,
     column,
-    cumulative,
+    byMonth,
     years: [...years].sort((first, second) => second - first).map((fiscalYear) => {
       const months = Array.from({ length: 12 }, (_unused, index) => {
         const month = ((9 + index) % 12) + 1
@@ -920,4 +999,221 @@ export async function createFileTables(db: PGlite, structure: FileStructure = fi
   }
   await recordInit(db, 'files43', version, structure.tables.length, 0)
   return { version, table_count: structure.tables.length, row_count: 0, created, applied: true }
+}
+
+/** One row of the answer to `GET /tables`. */
+export interface TableSummary {
+  table: string
+  /** `file43` for the 52 standard files, `reference` for c_*, `app` for PlkGap's own, `postgis` for the extension's. */
+  kind: 'file43' | 'reference' | 'app' | 'postgis'
+  /** Only filled in when counting was asked for; null otherwise. */
+  rowCount: number | null
+}
+
+/**
+ * Every table in the database, tagged by which group it belongs to.
+ * Counting is opt-in because an exact count of the 52 files is a full scan of tables holding every
+ * row ever imported, and PGlite shares the main process with the windows — so the count runs under
+ * the same read-only transaction and statement timeout as an API query.
+ */
+export async function listTables(db: PGlite, withCounts = false): Promise<TableSummary[]> {
+  const { rows } = await db.query<{ table: string; kind: TableSummary['kind'] }>(`
+    SELECT t.table_name AS "table",
+      CASE WHEN t.table_name IN (SELECT file_name FROM c_file) THEN 'file43'
+           WHEN t.table_name LIKE 'c\_%' THEN 'reference'
+           WHEN t.table_name = 'spatial_ref_sys' THEN 'postgis'
+           ELSE 'app' END AS kind
+    FROM information_schema.tables t
+    WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+    ORDER BY 2, 1`)
+  if (!withCounts || !rows.length) return rows.map((row) => ({ ...row, rowCount: null }))
+
+  const counted = await db.transaction(async (tx) => {
+    await tx.query('SET TRANSACTION READ ONLY')
+    await tx.query(`SET LOCAL statement_timeout = '15s'`)
+    const union = rows.map((row, index) =>
+      `SELECT $${index + 1}::text AS t, COUNT(*)::int AS n FROM ${quote(row.table)}`).join(' UNION ALL ')
+    return (await tx.query<{ t: string; n: number }>(union, rows.map((row) => row.table))).rows
+  })
+  const found = new Map(counted.map((row) => [row.t, row.n]))
+  return rows.map((row) => ({ ...row, rowCount: found.get(row.table) ?? 0 }))
+}
+
+/** One column of the answer to `GET /desc/{table}`. */
+export interface ColumnDescription {
+  name: string
+  type: string
+  nullable: boolean
+  default: string | null
+  /** Thai field name and note from the 43-file dictionary; empty for tables it does not cover. */
+  caption: string
+  description: string
+}
+export interface TableDescription {
+  table: string
+  /** The file's own entry in `c_files_desc`, empty for anything that is not one of the 52. */
+  description: string
+  rowCount: number
+  primaryKey: string[]
+  indexes: string[]
+  columns: ColumnDescription[]
+}
+
+/** Structure of one table in this database, with the Thai dictionary text where there is any. */
+export async function describeTable(db: PGlite, table: string): Promise<TableDescription | null> {
+  const name = table.trim().toLowerCase()
+  if (!/^[a-z_][a-z0-9_]*$/.test(name)) return null
+  const { rows: present } = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = $1`, [name])
+  if (!present[0]?.n) return null
+
+  const { rows: columns } = await db.query<ColumnDescription>(`
+    SELECT c.column_name AS name,
+      c.data_type || COALESCE('(' || c.character_maximum_length || ')', '') AS type,
+      c.is_nullable = 'YES' AS nullable, c.column_default AS "default",
+      COALESCE(d.caption, '') AS caption, COALESCE(d.description, '') AS description
+    FROM information_schema.columns c
+    LEFT JOIN LATERAL (
+      SELECT s.caption, s.description FROM c_files_schema s
+      WHERE LOWER(s.table_name) = $1 AND LOWER(s.name) = c.column_name AND s.is_active = 1
+      ORDER BY s.no LIMIT 1) d ON true
+    WHERE c.table_schema = 'public' AND c.table_name = $1
+    ORDER BY c.ordinal_position`, [name])
+  const { rows: key } = await db.query<{ name: string }>(`
+    SELECT a.attname AS name FROM pg_index i
+    CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+    WHERE i.indrelid = to_regclass($1) AND i.indisprimary ORDER BY k.ord`, [name])
+  const { rows: indexes } = await db.query<{ indexname: string }>(
+    `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1
+     ORDER BY indexname`, [name])
+  const { rows: counted } = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM ${quote(name)}`)
+  const { rows: file } = await db.query<{ description: string }>(
+    `SELECT description FROM c_files_desc WHERE LOWER(table_name) = $1 AND is_active = 1 LIMIT 1`, [name])
+
+  return {
+    table: name,
+    description: file[0]?.description ?? '',
+    rowCount: counted[0]?.n ?? 0,
+    primaryKey: key.map((row) => row.name),
+    indexes: indexes.map((row) => row.indexname),
+    columns,
+  }
+}
+
+/**
+ * Columns `POST /sql` must never hand real values for. An entry without a table masks that column
+ * name in every table it appears in; one with a table masks it there only.
+ */
+export const blockedApiColumns: { table?: string; column: string }[] = [
+  { column: 'lname' },
+  { column: 'cid' },
+  { column: 'telephone' },
+  { column: 'mobile' },
+  { table: 'home', column: 'house' },
+  { table: 'home', column: 'house_id' },
+]
+
+/** What a masked column reads as. */
+export const MASK = '***'
+/** The role `POST /sql` runs as: it can read the masked views and nothing else. */
+export const API_ROLE = 'plkgap_api'
+/** The schema holding one masked view per table, which is all that role can see. */
+export const API_SCHEMA = 'api'
+
+const blockedIn = (table: string, column: string) =>
+  blockedApiColumns.some((entry) => entry.column === column && (!entry.table || entry.table === table))
+
+/**
+ * Builds a masked mirror of every table in schema `api` and points the API role at it.
+ *
+ * Masking the column names a query happens to return would stop nothing: `SELECT cid AS x` renames
+ * it, `length(cid)` measures it, a subquery buries it. Replacing the value inside a view masks it
+ * at the source, so every one of those reads `***` instead. The role gets no privilege at all on
+ * `public`, so naming the real table outright is refused rather than answered.
+ * Rebuilt only when the blocked list or the shape of the tables changes.
+ */
+export async function createApiSchema(db: PGlite) {
+  await ensureInitTable(db)
+  const { rows: columns } = await db.query<{ table_name: string; column_name: string }>(`
+    SELECT c.table_name, c.column_name FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+    WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+    ORDER BY c.table_name, c.ordinal_position`)
+  const version = 'api@' + createHash('sha1')
+    .update(JSON.stringify([blockedApiColumns, MASK, columns])).digest('hex').slice(0, 12)
+  const done = await initializedVersion(db, 'api')
+  if (done?.version === version) return { ...done, applied: false }
+
+  await db.exec(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${API_ROLE}') THEN
+        CREATE ROLE ${API_ROLE} NOLOGIN;
+      END IF;
+    END $$;
+    DROP SCHEMA IF EXISTS ${API_SCHEMA} CASCADE;
+    CREATE SCHEMA ${API_SCHEMA};
+    REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${API_ROLE};
+    REVOKE ALL ON SCHEMA public FROM ${API_ROLE};
+    -- USAGE only: enough to resolve the PostGIS functions living in public, never to read a table.
+    GRANT USAGE ON SCHEMA public TO ${API_ROLE};
+    GRANT USAGE ON SCHEMA ${API_SCHEMA} TO ${API_ROLE};`)
+
+  const tables = [...new Set(columns.map((row) => row.table_name))]
+  let masked = 0
+  for (const table of tables) {
+    const own = columns.filter((row) => row.table_name === table)
+    if (own.some((row) => blockedIn(table, row.column_name))) masked += 1
+    const list = own.map((row) => blockedIn(table, row.column_name)
+      ? `'${MASK}'::text AS ${quote(row.column_name)}`
+      : quote(row.column_name)).join(', ')
+    await db.exec(`CREATE VIEW ${API_SCHEMA}.${quote(table)} AS SELECT ${list} FROM public.${quote(table)};`)
+  }
+  await db.exec(`GRANT SELECT ON ALL TABLES IN SCHEMA ${API_SCHEMA} TO ${API_ROLE};`)
+  await recordInit(db, 'api', version, masked, blockedApiColumns.length)
+  return { version, table_count: masked, row_count: blockedApiColumns.length, applied: true }
+}
+
+export interface SqlAnswer {
+  columns: string[]
+  rows: Record<string, unknown>[]
+  /** Rows the statement produced, which is more than `rows.length` when the answer was capped. */
+  rowCount: number
+  truncated: boolean
+}
+
+/**
+ * Runs one statement for the local HTTP API inside a read-only transaction with a statement
+ * timeout. PostgreSQL itself refuses any write, so a data-modifying CTE cannot slip past a
+ * keyword check and the 52 files full of imported rows cannot be dropped or emptied from here.
+ * The timeout matters because PGlite runs in the main process: a runaway query freezes the app.
+ */
+export async function runReadOnlySql(db: PGlite, sql: string, limit = 5000): Promise<SqlAnswer> {
+  const statement = sql.trim().replace(/;+\s*$/, '')
+  if (!statement) throw new Error('ต้องส่ง SQL มาด้วย')
+  return db.transaction(async (tx) => {
+    await tx.query('SET TRANSACTION READ ONLY')
+    await tx.query(`SET LOCAL statement_timeout = '15s'`)
+    // Dropping to the restricted role last, so the two SETs above still run as the owner.
+    // `api` ahead of `public` means an unqualified table name lands on the masked view.
+    await tx.query(`SET LOCAL ROLE ${API_ROLE}`)
+    await tx.query(`SET LOCAL search_path = ${API_SCHEMA}, public`)
+    const result = await tx.query<Record<string, unknown>>(statement).catch((reason: unknown) => {
+      throw maskedAway(reason)
+    })
+    return {
+      columns: result.fields.map((field) => field.name),
+      rows: result.rows.slice(0, limit),
+      rowCount: result.rows.length,
+      truncated: result.rows.length > limit,
+    }
+  })
+}
+
+/** Names the guardrail when a query reached past the masked views for the real table. */
+function maskedAway(reason: unknown) {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  if (!/permission denied/i.test(message)) return reason
+  return new Error(`${message} — API นี้อ่านได้เฉพาะ schema ${API_SCHEMA} ที่ปิดบังข้อมูลส่วนบุคคลไว้แล้ว`
+    + ' ให้เรียกชื่อตารางเปล่า ๆ ไม่ต้องนำหน้าด้วย public.')
 }

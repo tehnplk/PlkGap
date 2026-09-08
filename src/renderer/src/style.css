@@ -67,6 +67,8 @@ svg { flex-shrink: 0; }
 .modal-close { margin-left: auto; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px; flex-shrink: 0; }
 .modal-close:hover { background: #e81123; color: #fff; }
 .large-modal .table-wrapper { margin: 0; flex: 1; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
+.modal-actions { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); background: #f8f4fc; }
+.modal-actions-gap { flex: 1; }
 .check-problems { margin: 8px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.7; color: #a83030; }
 .check-problems li { overflow-wrap: anywhere; }
 .file-pick { padding: 0; cursor: pointer; }

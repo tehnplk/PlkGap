@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { basename, join } from 'node:path'
 import { stat } from 'node:fs/promises'
+import { startApiServer } from './server'
 import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
 import { checkImportZip, eachZipTextEntry, parsePipeFile } from './Import52Files'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -8,6 +9,7 @@ import { checkObservations, observationRows } from './database'
 
 let window: BrowserWindow | null = null
 let db: Awaited<ReturnType<typeof openDatabase>> | undefined
+let api: Awaited<ReturnType<typeof startApiServer>> | undefined
 let closing = false
 let confirmedExit = false
 let confirming = false
@@ -79,6 +81,7 @@ if (!app.requestSingleInstanceLock()) {
     const path = join(app.getPath('userData'), 'plkgap-pglite')
     db = await openDatabase(path)
     if (closing) { await db.close(); app.exit(); return }
+    api = await startApiServer(db)
     const authorizedWindow = (event: IpcMainInvokeEvent) => {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Unauthorized sender')
       return window
@@ -233,6 +236,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('import:log')
     ipcMain.removeHandler('import:check-file')
     ipcMain.removeHandler('import:run')
-    void db.close().catch(console.error).finally(() => app.exit())
+    void Promise.resolve(api?.close()).catch(console.error)
+      .then(() => db!.close()).catch(console.error).finally(() => app.exit())
   })
 }

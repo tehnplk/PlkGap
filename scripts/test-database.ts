@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase, databaseStatus, loadReferenceTables, createFileTables, createAppTables, listImportLog, startImportRun, insertStandardRows, loadGeographyTables } from '../src/main/database.ts'
+import { openDatabase, databaseStatus, loadReferenceTables, createFileTables, createAppTables, countByFiscalYears, listImportLog, startImportRun, insertStandardRows, loadGeographyTables } from '../src/main/database.ts'
 import type { FileStructure } from '../src/main/database.ts'
 import { checkObservations, observationRows, listObservationRules, setObservationRuleActive, syncObservationRules } from '../src/main/database.ts'
+import { describeTable, listTables, runReadOnlySql, MASK } from '../src/main/database.ts'
 import fileStructure from '../src/main/reference/f43-tables.json' with { type: 'json' }
 
 async function main() {
@@ -101,7 +102,7 @@ try {
   // Setup happens once: reopening the database must not redo or re-stamp any of it.
   const before = await db.query<{ component: string; initialized_at: Date }>(
     'SELECT component, initialized_at FROM schema_init ORDER BY component')
-  assert.deepEqual(before.rows.map((row) => row.component), ['app', 'files43', 'geography', 'observations', 'reference'],
+  assert.deepEqual(before.rows.map((row) => row.component), ['api', 'app', 'files43', 'geography', 'observations', 'reference'],
     'every component is recorded')
   await db.close()
   db = await openDatabase(join(directory, 'db'))
@@ -197,21 +198,133 @@ try {
   ], 'a later file overwrites matching rows, re-stamps them, and adds the new ones')
   await db.query('DELETE FROM person')
   console.log('PASS: re-importing a key replaces the row instead of duplicating it')
+  // ปริมาณข้อมูล splits by month only for a file that records activity on a date of its own.
+  // "แฟ้มสะสม" comes from the manual's own marker in c_files_desc, not from what columns exist.
+  for (const [table, column, byMonth, why] of [
+    ['service', 'date_serv', true, 'a service file with its own date splits by month'],
+    ['chronic', 'date_diag', false, 'CHRONIC has an event date but is แฟ้มสะสม, so it is yearly'],
+    ['person', 'd_update', false, 'แฟ้มสะสม with no event date at all'],
+    ['procedure_refer', 'd_update', false, 'a service file whose date the dictionary hides is yearly too'],
+  ] as const) {
+    const counted = await countByFiscalYears(db, table, [2569])
+    assert.equal(counted.column, column, `${table} is counted by ${column}`)
+    assert.equal(counted.byMonth, byMonth, why)
+    assert.equal(counted.years.length, 1)
+  }
+  assert.deepEqual((await countByFiscalYears(db, 'service', [])).years, [], 'no fiscal year asked, nothing counted')
+  await assert.rejects(() => countByFiscalYears(db, 'not_a_file', [2569]), /ไม่รู้จักแฟ้ม/)
+  console.log('PASS: fiscal-year counting picks its date column and splits by month only for dated service files')
+
+  // What the local HTTP API serves: a table's shape, and read-only SQL that PostgreSQL polices.
+  const catalogue = await listTables(db)
+  const byKind = (kind: string) => catalogue.filter((entry) => entry.kind === kind).map((entry) => entry.table)
+  assert.equal(byKind('file43').length, 52, 'the 52 standard files are tagged as such')
+  assert.ok(byKind('reference').length >= 120 && byKind('reference').every((name) => name.startsWith('c_')))
+  assert.deepEqual(byKind('postgis'), ['spatial_ref_sys'], 'the extension table is not mistaken for ours')
+  // Not an exact list: `test_places` from the PostGIS test above falls in here too, as it should.
+  for (const name of ['import52files_log', 'observ_check', 'schema_init', 'structure_check_log']) {
+    assert.ok(byKind('app').includes(name), `${name} is listed as one of PlkGap's own tables`)
+  }
+  assert.ok(catalogue.every((entry) => entry.rowCount === null), 'counting is off unless it is asked for')
+  const withCounts = await listTables(db, true)
+  assert.equal(withCounts.length, catalogue.length)
+  assert.equal(withCounts.find((entry) => entry.table === 'c_file').rowCount, 52)
+  assert.equal(withCounts.find((entry) => entry.table === 'person').rowCount, 0)
+  assert.ok(withCounts.every((entry) => typeof entry.rowCount === 'number'))
+
+  const described = await describeTable(db, 'PERSON')
+  assert.equal(described.table, 'person', 'the table name is matched case-insensitively')
+  assert.deepEqual(described.primaryKey, ['hospcode', 'pid'], 'the primary key keeps its order')
+  // Not an exact count: the structure-upgrade test above added a column PERSON now keeps for good.
+  assert.ok(described.columns.length >= 35, 'every PERSON column is described')
+  assert.deepEqual(described.columns.slice(0, 3).map((column) => column.name), ['hospcode', 'cid', 'pid'],
+    'columns keep their SUB-HDC order')
+  assert.match(described.columns[0].caption, /รหัสหน่วยบริการ/, 'the Thai dictionary text comes along')
+  assert.match(described.description, /แฟ้มสะสม/, 'so does the file description')
+  assert.ok(described.indexes.includes('idx_person_cid'))
+  assert.equal(await describeTable(db, 'no_such_table'), null)
+  assert.equal(await describeTable(db, 'person; DROP TABLE person'), null, 'a non-identifier is refused')
+
+  const answer = await runReadOnlySql(db, 'SELECT file_name FROM c_file ORDER BY file_name LIMIT 3;')
+  assert.deepEqual(answer.columns, ['file_name'])
+  assert.deepEqual(answer.rows.map((row) => row.file_name), ['accident', 'address', 'admission'])
+  assert.equal(answer.rowCount, 3)
+  assert.equal(answer.truncated, false)
+  const capped = await runReadOnlySql(db, 'SELECT * FROM c_hospital', 5)
+  assert.equal(capped.rows.length, 5)
+  assert.ok(capped.rowCount > 5 && capped.truncated, 'a long answer is capped and says so')
+  const emptied = await runReadOnlySql(db, `SELECT hospcode, pid FROM person WHERE pid = 'nobody'`)
+  assert.deepEqual(emptied.rows, [])
+  assert.deepEqual(emptied.columns, ['hospcode', 'pid'], 'column names survive an empty answer')
+  await assert.rejects(() => runReadOnlySql(db, '   '), /ต้องส่ง SQL/)
+  // PostgreSQL refuses the write itself, so no keyword blacklist has to be kept in step. Two
+  // things say no now: the read-only transaction, and the API role holding only SELECT.
+  for (const write of [
+    `INSERT INTO person (hospcode, pid) VALUES ('07488', 'API')`,
+    'DELETE FROM person',
+    'TRUNCATE person',
+    'DROP TABLE person',
+    `WITH gone AS (DELETE FROM person RETURNING pid) SELECT * FROM gone`,
+  ]) await assert.rejects(() => runReadOnlySql(db, write), /read-only transaction|permission denied|must be owner/i, write)
+  assert.equal((await runReadOnlySql(db, 'SELECT COUNT(*)::int AS n FROM c_file')).rows[0].n, 52,
+    'the database is untouched after every refused write')
+  console.log('PASS: local API describes a table and runs SQL that PostgreSQL holds read-only')
+
+  // Personal data is masked inside the database, so no way of asking for it gets the real value.
+  await db.query(`INSERT INTO person (hospcode, pid, cid, name, lname, telephone, mobile, birth)
+    VALUES ('07488','MASK','1234567890123','สมชาย','ใจดี','055123456','0812345678','20000101')`)
+  await db.query(`INSERT INTO home (hospcode, hid, house, house_id, telephone, village)
+    VALUES ('07488','MASKH','99/1','65010112345','055999888','02')`)
+  const plain = await runReadOnlySql(db, 'SELECT pid, cid, name, lname, telephone, mobile, birth FROM person')
+  assert.deepEqual(plain.rows[0], { pid: 'MASK', cid: MASK, name: 'สมชาย', lname: MASK,
+    telephone: MASK, mobile: MASK, birth: '20000101' }, 'only the listed columns are masked')
+  // Each of these would defeat a check made on the names a query returns.
+  const renamed = await runReadOnlySql(db, 'SELECT cid AS x, upper(lname) AS y, length(cid) AS n FROM person')
+  assert.deepEqual(renamed.rows[0], { x: MASK, y: MASK, n: 3 }, 'an alias or a function still reads the mask')
+  const buried = await runReadOnlySql(db, 'SELECT p.cid FROM (SELECT cid FROM person) p')
+  assert.equal(buried.rows[0].cid, MASK, 'a subquery cannot carry the real value out')
+  const wildcard = await runReadOnlySql(db, `SELECT * FROM home WHERE hid = 'MASKH'`)
+  assert.equal(wildcard.rows[0].house, MASK)
+  assert.equal(wildcard.rows[0].house_id, MASK)
+  assert.equal(wildcard.rows[0].telephone, MASK)
+  assert.equal(wildcard.rows[0].village, '02', 'SELECT * still answers, with the rest intact')
+  // The two house entries are scoped to HOME, so ADDRESS keeps its own house columns in the clear.
+  await db.query(`INSERT INTO address (hospcode, pid, addresstype, houseno, house_id)
+    VALUES ('07488','MASK','1','88/2','65010199999')`)
+  const scoped = await runReadOnlySql(db, `SELECT houseno, house_id FROM address WHERE pid = 'MASK'`)
+  assert.deepEqual(scoped.rows[0], { houseno: '88/2', house_id: '65010199999' },
+    'a table-scoped entry does not mask the same column name in another file')
+  await assert.rejects(() => runReadOnlySql(db, 'SELECT cid FROM public.person'),
+    /permission denied/, 'the real table is out of reach for the API role entirely')
+  const inside = await db.query('SELECT cid, lname, mobile FROM person WHERE pid = $1', ['MASK'])
+  assert.deepEqual(inside.rows[0], { cid: '1234567890123', lname: 'ใจดี', mobile: '0812345678' },
+    'the app itself reads the real values, the mask is only on the API')
+  await db.exec(`DELETE FROM person WHERE pid = 'MASK'; DELETE FROM home WHERE hid = 'MASKH';
+    DELETE FROM address WHERE pid = 'MASK';`)
+  console.log(`PASS: /sql masks ${MASK} at source — alias, function, subquery and SELECT * all get it`)
+
   const observationsRun = await startImportRun(db, { name: 'observations.zip', path: 'observations.zip', size: 1 })
   const cidBase = '123456789012'
   const validCid = cidBase + ((11 - [...cidBase].reduce((sum, digit, index) => sum + Number(digit) * (13 - index), 0) % 11) % 10)
   const wrongCid = validCid.slice(0, 12) + ((Number(validCid[12]) + 1) % 10)
-  const personHeader = ['HOSPCODE', 'PID', 'CID', 'NATION', 'PRENAME', 'SEX', 'DISCHARGE', 'DDISCHARGE']
+  // A third 13-digit CID, so duplicate-cid has something unique to leave alone.
+  const loneCid = '9876543210987'
+  const personHeader = ['HOSPCODE', 'PID', 'CID', 'NATION', 'PRENAME', 'SEX', 'DISCHARGE', 'DDISCHARGE',
+    'BIRTH', 'HID', 'TYPEAREA', 'NAME', 'LNAME']
   await insertStandardRows(db, second, 'person', personHeader, [
-    ['07488', 'D', validCid, '099', '003', '1', '1', '20260901'],
-    ['99999', 'D', validCid, '099', '003', '1', '1', '20200101'],
+    ['07488', 'D', validCid, '099', '003', '1', '1', '20260901', '20000101', 'H1', '1', 'ดี', 'ทดสอบ'],
+    ['99999', 'D', validCid, '099', '003', '1', '1', '20200101', '20000101', 'H1', '1', 'ดี', 'ทดสอบ'],
   ])
   await insertStandardRows(db, observationsRun, 'person', personHeader, [
-    ['07488', 'M', wrongCid, '099', '003', '2', '1', 'invalid'],
-    ['07488', 'F', 'invalid', '048', '129', '1', '2', '20200101'],
-    ['07488', 'U', '123', '099', '999', '9', '1', '20260230'],
-    ['07488', 'G', validCid, '099', '004', '2', '9', ''],
+    ['07488', 'M', wrongCid, '099', '003', '2', '1', 'invalid', '20000101', 'H1', '1', 'เอ็ม', 'ทดสอบ'],
+    ['07488', 'F', 'invalid', '048', '129', '1', '2', '20200101', '19900101', 'H9', '1', 'เอฟ', 'ทดสอบ'],
+    ['07488', 'U', '123', '099', '999', '9', '1', '20260230', '20990101', '', '4', 'ยู', 'ทดสอบ'],
+    ['07488', 'G', validCid, '099', '004', '2', '9', '', '20000101', 'H1', '1', 'จี', 'ทดสอบ'],
+    ['07488', 'X', validCid, '099', '003', '1', '9', '', '20000101', 'H1', '2', 'เอ็กซ์', 'ทดสอบ'],
+    ['07488', 'Y', loneCid, '099', '003', '1', '1', '19990101', '20000101', 'H2', '3', 'วาย', 'ทดสอบ'],
   ])
+  // Only H1 is a real house, so H9 and H2 are the ones person-without-home should raise.
+  await insertStandardRows(db, second, 'home', ['HOSPCODE', 'HID'], [['07488', 'H1']])
   const serviceHeader = ['HOSPCODE', 'PID', 'SEQ', 'DATE_SERV']
   await insertStandardRows(db, observationsRun, 'service', serviceHeader, [
     ['07488', 'D', 'OBS1', '20260831'], ['07488', 'D', 'OBS2', '20260901'], ['07488', 'D', 'OBS3', '20260902'],
@@ -219,17 +332,47 @@ try {
     ['07488', 'D', 'OBS7', '20261301'], ['07488', 'D', 'OBS8', '20260230'],
   ])
   await insertStandardRows(db, second, 'service', serviceHeader, [['07488', 'D', 'OTHER', '20260903']])
+  await insertStandardRows(db, observationsRun, 'diagnosis_opd',
+    ['HOSPCODE', 'PID', 'SEQ', 'DATE_SERV', 'DIAGCODE'], [
+      ['07488', 'D', 'OBS1', '20260831', 'J00'],
+      ['07488', 'D', 'NOPE', '20260831', 'J01'],
+      ['07488', 'D', '', '20260831', 'J02'],
+    ])
+  await insertStandardRows(db, observationsRun, 'drug_opd',
+    ['HOSPCODE', 'PID', 'SEQ', 'DATE_SERV', 'DIDSTD'], [
+      ['07488', 'D', 'OBS2', '20260901', '1000'],
+      ['07488', 'D', 'NOPE', '20260901', '1001'],
+    ])
+  await insertStandardRows(db, observationsRun, 'death', ['HOSPCODE', 'PID', 'DDEATH'], [
+    ['07488', 'D', '20260901'], // PERSON D is discharged as dead on the same day: consistent
+    ['07488', 'M', '20260901'], // discharged as dead, but on a date that is not a date at all
+    ['07488', 'G', '20260901'], // still carried as not discharged
+    ['07488', 'Z', '20260901'], // no PERSON to compare against
+    ['07488', 'K', 'bad'],
+  ])
+  // Both stamp lengths the 43 files allow, so the rule reads a date-only ADMISSION too.
+  await insertStandardRows(db, observationsRun, 'admission',
+    ['HOSPCODE', 'PID', 'AN', 'DATETIME_ADMIT', 'DATETIME_DISCH'], [
+      ['07488', 'D', 'A1', '20260901080000', '20260903100000'],
+      ['07488', 'D', 'A2', '20260903080000', '20260901100000'],
+      ['07488', 'D', 'A3', '20260901', '20260830'],
+      ['07488', 'D', 'A4', '', '20260901'],
+    ])
   const observed = await checkObservations(db, 'observations.zip')
   assert.deepEqual(observed.findings.map(({ id, checked, skipped, found }) => ({ id, checked, skipped, found })), [
     { id: 'service-after-death', checked: 3, skipped: 5, found: 1 },
-    { id: 'thai-cid-mod11', checked: 3, skipped: 1, found: 2 },
-    { id: 'prename-sex', checked: 2, skipped: 2, found: 1 },
-    // The fixture carries no birth date and no OPD rows, so these run but find nothing eligible.
-    { id: 'birth-in-future', checked: 0, skipped: 4, found: 0 },
-    { id: 'service-before-birth', checked: 0, skipped: 8, found: 0 },
-    { id: 'death-before-birth', checked: 0, skipped: 4, found: 0 },
-    { id: 'diagnosis-without-service', checked: 0, skipped: 0, found: 0 },
-    { id: 'drug-without-service', checked: 0, skipped: 0, found: 0 },
+    { id: 'thai-cid-mod11', checked: 5, skipped: 1, found: 3 },
+    { id: 'prename-sex', checked: 4, skipped: 2, found: 1 },
+    { id: 'birth-in-future', checked: 6, skipped: 0, found: 1 },
+    { id: 'service-before-birth', checked: 5, skipped: 3, found: 1 },
+    { id: 'death-before-birth', checked: 1, skipped: 5, found: 1 },
+    { id: 'diagnosis-without-service', checked: 2, skipped: 1, found: 1 },
+    { id: 'drug-without-service', checked: 2, skipped: 0, found: 1 },
+    { id: 'service-without-person', checked: 8, skipped: 0, found: 1 },
+    { id: 'person-without-home', checked: 5, skipped: 1, found: 2 },
+    { id: 'duplicate-cid', checked: 4, skipped: 2, found: 2 },
+    { id: 'death-without-discharge', checked: 3, skipped: 2, found: 2 },
+    { id: 'discharge-before-admit', checked: 3, skipped: 1, found: 2 },
   ])
   for (const finding of observed.findings) {
     const detail = await observationRows(db, 'observations.zip', finding.id)
@@ -240,7 +383,8 @@ try {
   assert.equal(deathRows.rows[0][deathRows.columns.indexOf('seq')], 'OBS3')
   await assert.rejects(() => observationRows(db, 'observations.zip', 'unknown'), /ไม่รู้จักเกณฑ์/)
   assert.ok((await checkObservations(db, 'missing.zip')).findings.every((finding) => finding.checked === 0 && finding.found === 0))
-  console.log('PASS: observation rules, cross-import PERSON joins, date boundaries, MOD11, prefix mapping, skipped rows and zip scope')
+  console.log(`PASS: ${observed.findings.length} observation rules — cross-import PERSON/HOME joins, date boundaries,`
+    + ' MOD11, prefix mapping, orphan rows, duplicate CID, both datetime stamp lengths, skipped rows and zip scope')
 
   // The observ_check register: seeded from the rules in code, and the only thing that decides
   // which of them a check actually runs.

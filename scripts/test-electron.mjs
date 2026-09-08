@@ -38,7 +38,10 @@ const badZip = join(importDirectory, 'F43_BAD.zip')
 await writeZip(validZip, standardFiles.map((name) => `F43_07494_20260819111826/${name.toUpperCase()}.txt`))
 await writeZip(flatZip, standardFiles.map((name) => `${name}.txt`))
 await writeZip(badZip, ['F43_BAD/PERSON.txt', 'F43_BAD/holiday-photo.jpg'])
-const env = { ...process.env, PLKGAP_TEST_DATA_DIR: directory, PLKGAP_IMPORT_DIR: importDirectory }
+// A port of its own, so a PlkGap the developer already has open does not collide with the test.
+const apiPort = 9989
+const api = `http://127.0.0.1:${apiPort}`
+const env = { ...process.env, PLKGAP_TEST_DATA_DIR: directory, PLKGAP_IMPORT_DIR: importDirectory, PLKGAP_API_PORT: String(apiPort) }
 delete env.ELECTRON_RUN_AS_NODE
 let application
 try {
@@ -167,12 +170,17 @@ try {
   await expect(dataCount).toContainText('date_serv')
   assert.deepEqual(await dataCount.locator('thead th').allInnerTexts(),
     ['ปีงบ', 'ต.ค.', 'พ.ย.', 'ธ.ค.', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'รวม'])
-  // แฟ้มสะสม is counted by d_update, so it reports fiscal-year totals with no month columns.
+  // แฟ้มสะสม is a standing register, so it reports fiscal-year totals with no month columns.
   await dataCount.getByLabel('เลือกแฟ้ม').selectOption('person')
   await expect(dataCount).toContainText('d_update')
   assert.deepEqual(await dataCount.locator('thead th').allInnerTexts(), ['ปีงบ', 'รวม'])
   await expect(dataCount.locator('tbody tr')).toHaveCount(5)
   await expect(dataCount.locator('tbody tr').first().locator('td')).toHaveCount(2)
+  // CHRONIC has date_diag of its own and would still be yearly: the manual's marker in
+  // c_files_desc decides which files are แฟ้มสะสม, not whether a date column happens to exist.
+  await dataCount.getByLabel('เลือกแฟ้ม').selectOption('chronic')
+  await expect(dataCount).toContainText('date_diag')
+  assert.deepEqual(await dataCount.locator('thead th').allInnerTexts(), ['ปีงบ', 'รวม'])
   await dataCount.getByLabel('เลือกแฟ้ม').selectOption('service')
   await expect(dataCount).toContainText('date_serv')
   await expect(dataCount.locator('tbody tr')).toHaveCount(5)
@@ -367,12 +375,21 @@ try {
 
   await navigation.getByRole('button', { name: 'คุณภาพตามข้อสังเกต', exact: true }).click()
   const observations = page.getByRole('region', { name: 'คุณภาพตามข้อสังเกต - ObservationCheckPage window' })
-  await observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
-  const observationTable = observations.getByRole('table', { name: 'ผลตรวจตามข้อสังเกต', exact: true })
-  // The register drives the result list, so both tables carry one row per rule switched on.
-  const register = observations.getByRole('table', { name: 'ทะเบียนข้อสังเกต', exact: true })
+  // Checking asks which rules to run first: the register comes up as a picker.
+  const startCheck = () => observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
+  const picker = observations.getByRole('dialog', { name: 'ทะเบียนข้อสังเกต' })
+  const confirm = () => picker.getByRole('button', { name: 'ตกลง', exact: true })
+  await startCheck()
+  await expect(picker).toBeVisible()
+  const register = picker.getByRole('table', { name: 'ทะเบียนข้อสังเกต', exact: true })
   const registered = await register.locator('tbody tr').count()
   assert.ok(registered > 0, 'the observ_check register is seeded')
+  await expect(register.getByRole('checkbox')).toHaveCount(registered)
+  // Every registered rule starts ticked, so confirming runs the lot.
+  await expect(picker.getByRole('checkbox', { checked: true })).toHaveCount(registered)
+  await confirm().click()
+  await expect(picker).toBeHidden()
+  const observationTable = observations.getByRole('table', { name: 'ผลตรวจตามข้อสังเกต', exact: true })
   await expect(observationTable.locator('tbody tr')).toHaveCount(registered)
   await expect(observationTable).not.toContainText('NCDSCREEN')
   // The fixture only fills PERSON and SERVICE, so exactly the three rules reading them trip.
@@ -388,16 +405,86 @@ try {
     await observationDialog.getByRole('button', { name: 'ปิด', exact: true }).click()
     await expect(observationDialog).toBeHidden()
   }
-  // Switching a rule off in the register takes it out of the next check, and back on restores it.
+  // Unticking a rule leaves it out of the run, and the register keeps the choice for the next one.
   const prenameRule = register.locator('tbody tr').filter({ hasText: 'prename-sex' })
+  await startCheck()
   await prenameRule.getByRole('checkbox').uncheck()
-  await observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
+  await confirm().click()
   await expect(observationTable.locator('tbody tr')).toHaveCount(registered - 1)
   await expect(observationTable).not.toContainText('คำนำหน้าชื่อไม่สอดคล้องกับเพศ')
+  await startCheck()
+  await expect(prenameRule.getByRole('checkbox')).not.toBeChecked()
+  // ยกเลิก drops the ticks made in the modal without touching the register.
   await prenameRule.getByRole('checkbox').check()
-  await observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
+  await picker.getByRole('button', { name: 'ยกเลิก', exact: true }).click()
+  await expect(picker).toBeHidden()
+  await startCheck()
+  await expect(prenameRule.getByRole('checkbox')).not.toBeChecked()
+  await picker.getByRole('button', { name: 'ไม่เลือกเลย', exact: true }).click()
+  await expect(confirm()).toBeDisabled()
+  await picker.getByRole('button', { name: 'เลือกทั้งหมด', exact: true }).click()
+  await page.screenshot({ path: 'artifacts/plkgap-observation-picker.png', fullPage: true })
+  await confirm().click()
   await expect(observationTable.locator('tbody tr')).toHaveCount(registered)
   await page.screenshot({ path: 'artifacts/plkgap-observation-check.png', fullPage: true })
+
+  // The local HTTP API answers off the same PGlite instance the windows are reading.
+  const helpResponse = await fetch(`${api}/help`)
+  assert.equal(helpResponse.status, 200)
+  assert.equal(helpResponse.headers.get('access-control-allow-origin'), null, 'no CORS: a web page must not reach it')
+  const helpBody = await helpResponse.json()
+  assert.deepEqual(helpBody.endpoints.map((entry) => `${entry.method} ${entry.path}`),
+    ['GET /help', 'GET /tables', 'GET /desc/{table_name}', 'POST /sql'])
+
+  const tables = await (await fetch(`${api}/tables`)).json()
+  assert.equal(tables.filter((entry) => entry.kind === 'file43').length, 52)
+  assert.ok(tables.every((entry) => entry.rowCount === null), 'GET /tables answers without counting')
+  const counted = await (await fetch(`${api}/tables?rows=1`)).json()
+  assert.equal(counted.find((entry) => entry.table === 'person').rowCount, 1, 'rows=1 counts what was imported')
+  assert.equal(counted.find((entry) => entry.table === 'c_file').rowCount, 52)
+  assert.equal((await fetch(`${api}/tables`, { method: 'POST' })).status, 405)
+
+  const describe = await fetch(`${api}/desc/person`)
+  assert.equal(describe.status, 200)
+  const person = await describe.json()
+  assert.deepEqual(person.primaryKey, ['hospcode', 'pid'])
+  assert.equal(person.rowCount, 1, 'it sees the row the import just brought in')
+  assert.match(person.columns.find((column) => column.name === 'cid').caption, /บัตรประชาชน/)
+  assert.equal((await fetch(`${api}/desc/nope`)).status, 404)
+  assert.equal((await fetch(`${api}/desc/person`, { method: 'POST' })).status, 405)
+
+  const query = async (sql, headers = { 'Content-Type': 'text/plain' }) =>
+    fetch(`${api}/sql`, { method: 'POST', headers, body: sql })
+  const selected = await query('SELECT hospcode, pid FROM person')
+  assert.equal(selected.status, 200)
+  assert.equal(selected.headers.get('X-Row-Count'), '1')
+  assert.equal(selected.headers.get('X-Truncated'), 'false')
+  assert.equal(selected.headers.get('X-Columns'), 'hospcode,pid')
+  assert.deepEqual(await selected.json(), [{ hospcode: 'GA0014056', pid: 'TEST1' }],
+    'POST /sql answers with a plain JSON array of rows')
+  // Personal data is masked inside the database, so renaming or wrapping it changes nothing.
+  const masked = await (await query('SELECT cid, cid AS copy, length(cid) AS n, pid FROM person')).json()
+  assert.deepEqual(masked, [{ cid: '***', copy: '***', n: 3, pid: 'TEST1' }],
+    'cid comes back masked however it is asked for')
+  assert.equal((await (await query('SELECT * FROM person')).json())[0].cid, '***', 'SELECT * is masked too')
+  const denied = await query('SELECT cid FROM public.person')
+  assert.equal(denied.status, 400)
+  assert.match((await denied.json()).error, /permission denied/, 'the unmasked table is out of reach')
+  assert.ok(helpBody.endpoints.find((entry) => entry.path === '/sql').masked.columns
+    .every((name) => ['lname', 'cid', 'telephone', 'mobile', 'home.house', 'home.house_id'].includes(name)),
+    '/help lists what is masked')
+  const asJson = await query(JSON.stringify({ sql: 'SELECT COUNT(*)::int AS n FROM c_file' }),
+    { 'Content-Type': 'application/json' })
+  assert.deepEqual(await asJson.json(), [{ n: 52 }])
+  // Read-only is enforced by PostgreSQL — twice over, since the API role only holds SELECT —
+  // and the app must still hold the row afterwards.
+  const refused = await query('DELETE FROM person')
+  assert.equal(refused.status, 400)
+  assert.match((await refused.json()).error, /read-only transaction|permission denied/i)
+  assert.deepEqual(await (await query('SELECT COUNT(*)::int AS n FROM person')).json(), [{ n: 1 }])
+  assert.equal((await query('SELECT 1 FROM nowhere')).status, 400)
+  assert.equal((await fetch(`${api}/sql`)).status, 405)
+  assert.equal((await fetch(`${api}/nothing-here`)).status, 404)
 
   await navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true }).click()
   const serviceUnit = page.getByRole('region', { name: 'ตั้งค่าหน่วยบริการ - ServiceUnitPage window' })
