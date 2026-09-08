@@ -3,19 +3,86 @@ import type { KeyboardEvent, PointerEvent } from 'react'
 import type { DatabaseStatus } from '../../shared/api'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
-import { WelcomePage } from './pages/WelcomePage'
-import { DatabasePage } from './pages/DatabasePage'
-import { MapPage } from './pages/MapPage'
-import { AboutPage } from './pages/AboutPage'
-import { TablePage } from './pages/TablePage'
+import { ImportPage } from './pages/files43/ImportPage'
+import { StructureCheckPage } from './pages/files43/StructureCheckPage'
+import { StandardCheckPage } from './pages/files43/StandardCheckPage'
+import { IndicatorTemplatePage } from './pages/analytics/IndicatorTemplatePage'
+import { RevenueTemplatePage } from './pages/analytics/RevenueTemplatePage'
+import { HouseholdMapPage } from './pages/mapping/HouseholdMapPage'
+import { LineMorPromPage } from './pages/messaging/LineMorPromPage'
+import { DenguePage } from './pages/epidemiology/DenguePage'
+import { ServiceUnitPage } from './pages/settings/ServiceUnitPage'
+import { SubHdcPage } from './pages/settings/SubHdcPage'
+import { PlkDashboardPage } from './pages/settings/PlkDashboardPage'
+import { DevelopersPage } from './pages/about/DevelopersPage'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
-type Kind = 'welcome' | 'database' | 'map' | 'table' | 'about'
+type Kind =
+  | 'import' | 'structure-check' | 'standard-check'
+  | 'kpi-template' | 'revenue-template'
+  | 'household-map'
+  | 'line-morprom'
+  | 'dengue'
+  | 'service-unit' | 'subhdc' | 'plk-dashboard'
+  | 'developers'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
 type Item = { label: string; action: () => void; disabled?: boolean; hint?: string }
-const titles: Record<Kind, string> = { welcome: 'Welcome', database: 'Database', map: 'Map', table: 'Sample Data', about: 'About PlkGap' }
-const icons: Record<Kind, IconName> = { welcome: 'home', database: 'database', map: 'map', table: 'table', about: 'info' }
+type Group = { id: string; label: string; icon: IconName; items: Kind[] }
+
+const titles: Record<Kind, string> = {
+  import: 'นำเข้าข้อมูล',
+  'structure-check': 'ตรวจตามโครงสร้าง',
+  'standard-check': 'ตรวจตามหลักวิชาการ',
+  'kpi-template': 'เทมเพลตตัวชี้วัด',
+  'revenue-template': 'เทมเพลตงานจัดเก็บรายได้',
+  'household-map': 'ตำแหน่งครัวเรือน (แฟ้ม Home)',
+  'line-morprom': 'ส่ง Line หมอพร้อม',
+  dengue: 'ไข้เลือดออก',
+  'service-unit': 'ตั้งค่าหน่วยบริการ',
+  subhdc: 'ตั้งค่าเชื่อมต่อระบบอำเภอ (SUB-HDC)',
+  'plk-dashboard': 'ตั้งค่าเชื่อมต่อระบบจังหวัด (PLK Dashboard)',
+  developers: 'ผู้พัฒนา',
+}
+const icons: Record<Kind, IconName> = {
+  import: 'upload',
+  'structure-check': 'structure',
+  'standard-check': 'book',
+  'kpi-template': 'gauge',
+  'revenue-template': 'money',
+  'household-map': 'home',
+  'line-morprom': 'send',
+  dengue: 'virus',
+  'service-unit': 'hospital',
+  subhdc: 'link',
+  'plk-dashboard': 'dashboard',
+  developers: 'users',
+}
+// Basename of the page component that renders each Kind — shown after the title in window chrome.
+const sources: Record<Kind, string> = {
+  import: 'ImportPage',
+  'structure-check': 'StructureCheckPage',
+  'standard-check': 'StandardCheckPage',
+  'kpi-template': 'IndicatorTemplatePage',
+  'revenue-template': 'RevenueTemplatePage',
+  'household-map': 'HouseholdMapPage',
+  'line-morprom': 'LineMorPromPage',
+  dengue: 'DenguePage',
+  'service-unit': 'ServiceUnitPage',
+  subhdc: 'SubHdcPage',
+  'plk-dashboard': 'PlkDashboardPage',
+  developers: 'DevelopersPage',
+}
+const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
+const groups: Group[] = [
+  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'standard-check'] },
+  { id: 'analytics', label: 'ระบบวิเคราะห์ข้อมูล', icon: 'chart', items: ['kpi-template', 'revenue-template'] },
+  { id: 'mapping', label: 'ระบบแผนที่', icon: 'map', items: ['household-map'] },
+  { id: 'messaging', label: 'ระบบสื่อสาร', icon: 'message', items: ['line-morprom'] },
+  { id: 'epidemiology', label: 'ระบบระบาดวิทยาและควบคุมโรค', icon: 'activity', items: ['dengue'] },
+  { id: 'settings', label: 'ตั้งค่า', icon: 'settings', items: ['service-unit', 'subhdc', 'plk-dashboard'] },
+]
+const flushPages: Kind[] = ['household-map']
 
 export function App() {
   const [status, setStatus] = useState<DatabaseStatus>()
@@ -54,13 +121,25 @@ export function App() {
       return item ? [...items.filter((entry) => entry.id !== id), { ...item, minimized: false }] : items
     })
   }
+  function createChildWindow(id: Kind, area: HTMLElement, count: number): Child {
+    const width = Math.min(820, area.clientWidth - 32)
+    const height = Math.min(520, area.clientHeight - 32)
+    const offset = 28 + count * 30
+    return {
+      id,
+      width,
+      height,
+      x: Math.max(0, Math.min(offset, area.clientWidth - width)),
+      y: Math.max(0, Math.min(offset, area.clientHeight - height)),
+      minimized: false,
+      maximized: true,
+    }
+  }
+
   function open(id: Kind) {
     if (windows.some((item) => item.id === id)) { focus(id); return }
     const area = workspace.current!
-    const width = Math.min(id === 'about' ? 460 : id === 'table' ? 760 : 660, area.clientWidth - 32)
-    const height = Math.min(id === 'about' ? 310 : id === 'table' ? 480 : 450, area.clientHeight - 32)
-    const offset = 28 + windows.length * 30
-    setWindows((items) => [...items, { id, width, height, x: Math.max(0, Math.min(offset, area.clientWidth - width)), y: Math.max(0, Math.min(offset, area.clientHeight - height)), minimized: false, maximized: false }])
+    setWindows((items) => [...items, createChildWindow(id, area, items.length)])
   }
   function patch(id: Kind, values: Partial<Child>) { setWindows((items) => items.map((item) => item.id === id ? { ...item, ...values } : item)) }
   function close(id: Kind) { setWindows((items) => items.filter((item) => item.id !== id)) }
@@ -72,7 +151,7 @@ export function App() {
     const rows = Math.ceil(count / columns)
     setWindows((items) => items.map((item, index) => mode === 'tile'
       ? { ...item, minimized: false, maximized: false, x: gap + (index % columns) * ((area.clientWidth - gap) / columns), y: gap + Math.floor(index / columns) * ((area.clientHeight - gap) / rows), width: (area.clientWidth - gap) / columns - gap, height: (area.clientHeight - gap) / rows - gap }
-      : { ...item, minimized: false, maximized: false, x: gap + index * 28, y: gap + index * 28, width: Math.min(660, area.clientWidth - gap * 2 - (count - 1) * 28), height: Math.min(450, area.clientHeight - gap * 2 - (count - 1) * 28) }))
+      : { ...item, minimized: false, maximized: false, x: gap + index * 28, y: gap + index * 28, width: Math.min(760, area.clientWidth - gap * 2 - (count - 1) * 28), height: Math.min(500, area.clientHeight - gap * 2 - (count - 1) * 28) }))
   }
   function move(event: PointerEvent<HTMLElement>, item: Child, resize = false) {
     if (event.button !== 0 || item.maximized || (!resize && (event.target as HTMLElement).closest('button'))) return
@@ -96,10 +175,10 @@ export function App() {
   }
 
   const menus: Record<string, Item[]> = {
-    File: [{ label: 'Welcome', action: () => open('welcome') }, { label: 'Open database', action: () => open('database') }, { label: 'Open map', action: () => open('map') }, { label: 'Sample data', action: () => open('table') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
+    File: [{ label: titles.import, action: () => open('import') }, { label: titles['household-map'], action: () => open('household-map') }, { label: titles['service-unit'], action: () => open('service-unit') }, { label: 'Close active window', action: () => active && close(active.id), disabled: !active }, { label: 'Exit', action: () => window.close() }],
     View: [{ label: 'Status bar', action: () => setStatusbar(!statusbar), hint: statusbar ? 'On' : 'Off' }],
-    Window: [{ label: 'Cascade windows', action: () => arrange('cascade'), disabled: !windows.length }, { label: 'Tile windows', action: () => arrange('tile'), disabled: !windows.length }, { label: 'Close all windows', action: () => setWindows([]), disabled: !windows.length }, ...windows.map((item) => ({ label: titles[item.id], action: () => focus(item.id), hint: item.minimized ? 'Minimized' : active?.id === item.id ? 'Active' : '' }))],
-    Help: [{ label: 'About PlkGap', action: () => open('about') }],
+    Window: [{ label: 'Cascade windows', action: () => arrange('cascade'), disabled: !windows.length }, { label: 'Tile windows', action: () => arrange('tile'), disabled: !windows.length }, { label: 'Close all windows', action: () => setWindows([]), disabled: !windows.length }, ...windows.map((item) => ({ label: windowTitle(item.id), action: () => focus(item.id), hint: item.minimized ? 'Minimized' : active?.id === item.id ? 'Active' : '' }))],
+    'เกี่ยวกับ': [{ label: titles.developers, action: () => open('developers') }],
   }
   function menuKeys(event: KeyboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLButtonElement
@@ -130,22 +209,29 @@ export function App() {
     </div>
     </TitleBar>
     <div className="desktop-body">
-      <Sidebar activeId={active?.id} items={(Object.keys(titles) as Kind[]).map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) }))} />
+      <Sidebar activeId={active?.id} groups={groups.map((group) => ({ id: group.id, label: group.label, icon: group.icon, items: group.items.map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) })) }))} />
     <div className="workspace" ref={workspace} aria-label="MDI workspace">
-      {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${titles[item.id]} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
-        <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{titles[item.id]}</span><div className="window-controls"><button aria-label={`Minimize ${titles[item.id]}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${titles[item.id]}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${titles[item.id]}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
-        <div className={item.id === 'map' ? 'window-content flush' : 'window-content'}>
-          {item.id === 'welcome' && <WelcomePage onOpenDatabase={() => open('database')} />}
-          {item.id === 'database' && <DatabasePage status={status} error={error} />}
-          {item.id === 'map' && <MapPage />}
-          {item.id === 'table' && <TablePage />}
-          {item.id === 'about' && <AboutPage />}
+      {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
+        <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
+        <div className={flushPages.includes(item.id) ? 'window-content flush' : 'window-content'}>
+          {item.id === 'import' && <ImportPage />}
+          {item.id === 'structure-check' && <StructureCheckPage />}
+          {item.id === 'standard-check' && <StandardCheckPage />}
+          {item.id === 'kpi-template' && <IndicatorTemplatePage />}
+          {item.id === 'revenue-template' && <RevenueTemplatePage />}
+          {item.id === 'household-map' && <HouseholdMapPage />}
+          {item.id === 'line-morprom' && <LineMorPromPage />}
+          {item.id === 'dengue' && <DenguePage />}
+          {item.id === 'service-unit' && <ServiceUnitPage />}
+          {item.id === 'subhdc' && <SubHdcPage />}
+          {item.id === 'plk-dashboard' && <PlkDashboardPage />}
+          {item.id === 'developers' && <DevelopersPage />}
         </div>
         {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}
       </section>)}
-    {windows.some((item) => item.minimized) && <div className="window-dock" aria-label="Open windows">{windows.filter((item) => item.minimized).map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${titles[item.id]}` : titles[item.id]}><Icon name={icons[item.id]} size={15} />{titles[item.id]}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
+    {windows.some((item) => item.minimized) && <div className="window-dock" aria-label="Open windows">{windows.filter((item) => item.minimized).map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${windowTitle(item.id)}` : windowTitle(item.id)}><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
     </div>
     </div>
-    {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>Local database</span><span className="status-end">{active ? titles[active.id] : 'Ready'}<span className="status-divider" />PlkGap</span></footer>}
+    {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>Local database</span><span className="status-end">{active ? windowTitle(active.id) : 'Ready'}<span className="status-divider" />PlkGap</span></footer>}
   </main>
 }

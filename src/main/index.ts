@@ -26,6 +26,7 @@ function createWindow() {
       sandbox: true,
     },
   })
+  window.maximize()
   const mainWindow = window
   const publishWindowState = () => {
     if (!mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('window:maximized', mainWindow.isMaximized())

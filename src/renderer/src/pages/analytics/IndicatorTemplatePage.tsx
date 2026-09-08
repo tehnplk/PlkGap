@@ -1,0 +1,69 @@
+import { useState } from 'react'
+import { Icon } from '../../Icon'
+
+interface Indicator { code: string; name: string; unit: string; target: number; value: number; owner: string }
+
+const INDICATORS: Indicator[] = [
+  { code: 'KPI-01', name: 'ร้อยละหญิงตั้งครรภ์ฝากครรภ์ครั้งแรกก่อน 12 สัปดาห์', unit: '%', target: 75, value: 81.4, owner: 'กลุ่มงานส่งเสริมสุขภาพ' },
+  { code: 'KPI-02', name: 'ร้อยละเด็ก 0-5 ปี มีพัฒนาการสมวัย', unit: '%', target: 85, value: 88.2, owner: 'กลุ่มงานส่งเสริมสุขภาพ' },
+  { code: 'KPI-03', name: 'ร้อยละผู้ป่วยเบาหวานควบคุมระดับน้ำตาลได้ดี', unit: '%', target: 40, value: 33.7, owner: 'กลุ่มงาน NCD' },
+  { code: 'KPI-04', name: 'ร้อยละผู้ป่วยความดันโลหิตสูงควบคุมความดันได้ดี', unit: '%', target: 60, value: 57.1, owner: 'กลุ่มงาน NCD' },
+  { code: 'KPI-05', name: 'ร้อยละการคัดกรองมะเร็งปากมดลูกในสตรี 30-60 ปี', unit: '%', target: 80, value: 62.9, owner: 'กลุ่มงานควบคุมโรค' },
+  { code: 'KPI-06', name: 'อัตราการครองเตียงผู้ป่วยใน', unit: '%', target: 80, value: 74.5, owner: 'กลุ่มงานบริการ' },
+]
+
+export function IndicatorTemplatePage() {
+  const [period, setPeriod] = useState('2569-Q4')
+  const [onlyBelow, setOnlyBelow] = useState(false)
+  const rows = INDICATORS.filter((item) => !onlyBelow || item.value < item.target)
+  const passed = INDICATORS.filter((item) => item.value >= item.target).length
+
+  return <>
+    <div className="content-heading">
+      <div>
+        <p className="eyebrow">ระบบวิเคราะห์ข้อมูล</p>
+        <h2>เทมเพลตตัวชี้วัด</h2>
+      </div>
+      <span className="badge">ผ่านเกณฑ์ {passed}/{INDICATORS.length}</span>
+    </div>
+    <p>เทมเพลตสำเร็จรูปสำหรับคำนวณตัวชี้วัดจากข้อมูล 43 แฟ้ม เลือกงวดแล้วสั่งประมวลผล หรือส่งออกเป็นไฟล์รายงาน</p>
+
+    <div className="toolbar-row">
+      <label htmlFor="kpi-period">งวดข้อมูล</label>
+      <select id="kpi-period" className="mock-select" value={period} onChange={(event) => setPeriod(event.target.value)}>
+        <option value="2569-Q1">ปีงบ 2569 ไตรมาส 1</option>
+        <option value="2569-Q2">ปีงบ 2569 ไตรมาส 2</option>
+        <option value="2569-Q3">ปีงบ 2569 ไตรมาส 3</option>
+        <option value="2569-Q4">ปีงบ 2569 ไตรมาส 4</option>
+      </select>
+      <button type="button" className="mock-button primary"><Icon name="gauge" size={15} />ประมวลผลตัวชี้วัด</button>
+      <button type="button" className="mock-button">ส่งออก Excel</button>
+      <label className="mock-check" style={{ marginLeft: 'auto' }}>
+        <input type="checkbox" checked={onlyBelow} onChange={(event) => setOnlyBelow(event.target.checked)} />
+        แสดงเฉพาะที่ต่ำกว่าเป้า
+      </label>
+    </div>
+
+    <div className="table-wrapper">
+      <table className="data-table" aria-label="ตารางตัวชี้วัด">
+        <thead><tr><th>รหัส</th><th>ชื่อตัวชี้วัด</th><th>ผู้รับผิดชอบ</th><th className="col-right">เป้าหมาย</th><th className="col-right">ผลงาน</th><th>ความคืบหน้า</th></tr></thead>
+        <tbody>
+          {rows.map((item) => {
+            const ratio = Math.min(100, Math.round((item.value / item.target) * 100))
+            return <tr key={item.code}>
+              <td className="code-cell"><code>{item.code}</code></td>
+              <td className="name-cell"><strong>{item.name}</strong></td>
+              <td>{item.owner}</td>
+              <td className="col-right num-cell">{item.target}{item.unit}</td>
+              <td className="col-right num-cell">{item.value.toFixed(1)}{item.unit}</td>
+              <td style={{ minWidth: 140 }}>
+                <div className="progress"><span className={item.value >= item.target ? '' : 'below'} style={{ width: `${ratio}%` }} /></div>
+              </td>
+            </tr>
+          })}
+        </tbody>
+      </table>
+    </div>
+    <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) สูตรคำนวณจริงจะเก็บเป็นเทมเพลต SQL ต่อหนึ่งตัวชี้วัด</p></div>
+  </>
+}

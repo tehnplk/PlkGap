@@ -3,25 +3,33 @@ import type { IconName } from './Icon'
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
 
-interface SidebarItem {
+export interface SidebarItem {
   id: string
   label: string
   icon: IconName
   onClick: () => void
 }
 
-interface SidebarProps {
-  activeId?: string
+export interface SidebarGroup {
+  id: string
+  label: string
+  icon: IconName
   items: SidebarItem[]
 }
 
-export function Sidebar({ activeId, items }: SidebarProps) {
+interface SidebarProps {
+  activeId?: string
+  groups: SidebarGroup[]
+}
+
+export function Sidebar({ activeId, groups }: SidebarProps) {
   const sidebar = useRef<HTMLElement>(null)
-  const lastWidth = useRef(220)
+  const lastWidth = useRef(240)
   const drag = useRef<{ x: number; width: number } | null>(null)
-  const [width, setWidth] = useState(220)
-  const [maximum, setMaximum] = useState(220)
+  const [width, setWidth] = useState(240)
+  const [maximum, setMaximum] = useState(240)
   const [dragging, setDragging] = useState(false)
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const expanded = width > 44
 
   useEffect(() => {
@@ -37,7 +45,7 @@ export function Sidebar({ activeId, items }: SidebarProps) {
 
   function resize(requested: number) {
     const limit = sidebar.current!.parentElement!.clientWidth / 2
-    const next = requested < 100 ? 44 : Math.min(limit, Math.max(140, requested))
+    const next = requested < 100 ? 44 : Math.min(limit, Math.max(160, requested))
     if (next > 44) lastWidth.current = next
     setWidth(next)
   }
@@ -45,6 +53,16 @@ export function Sidebar({ activeId, items }: SidebarProps) {
   function onToggle() {
     if (expanded) { lastWidth.current = width; setWidth(44) }
     else resize(lastWidth.current)
+  }
+
+  function toggleGroup(id: string) {
+    setCollapsedGroups((current) => current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id])
+  }
+
+  function onGroupClick(id: string) {
+    if (expanded) { toggleGroup(id); return }
+    setCollapsedGroups((current) => current.filter((entry) => entry !== id))
+    resize(lastWidth.current)
   }
 
   function startDrag(event: PointerEvent<HTMLDivElement>) {
@@ -65,11 +83,30 @@ export function Sidebar({ activeId, items }: SidebarProps) {
       </button>
     </div>
     <nav id="sidebar-navigation" aria-label="Sidebar navigation">
-      {expanded && <p className="sidebar-label">Workspace</p>}
-      {items.map((item) => <button key={item.id} className={activeId === item.id ? 'sidebar-item active' : 'sidebar-item'} onClick={item.onClick} aria-label={item.label} aria-current={activeId === item.id ? 'page' : undefined} title={item.label}>
-        <Icon name={item.icon} size={17} />
-        {expanded && <span>{item.label}</span>}
-      </button>)}
+      {groups.map((group) => {
+        const open = expanded && !collapsedGroups.includes(group.id)
+        return <div className="sidebar-group" key={group.id}>
+          <button
+            className={`sidebar-group-header ${group.items.some((item) => item.id === activeId) ? 'has-active' : ''}`}
+            onClick={() => onGroupClick(group.id)}
+            aria-expanded={open}
+            aria-controls={`sidebar-group-${group.id}`}
+            title={group.label}
+          >
+            <Icon name={group.icon} size={17} />
+            {expanded && <>
+              <span>{group.label}</span>
+              <span className="sidebar-chevron"><Icon name="chevron" size={13} /></span>
+            </>}
+          </button>
+          <div className="sidebar-group-items" id={`sidebar-group-${group.id}`} hidden={!open}>
+            {group.items.map((item) => <button key={item.id} className={activeId === item.id ? 'sidebar-item active' : 'sidebar-item'} onClick={item.onClick} aria-current={activeId === item.id ? 'page' : undefined} title={item.label}>
+              <Icon name={item.icon} size={15} />
+              <span>{item.label}</span>
+            </button>)}
+          </div>
+        </div>
+      })}
     </nav>
     <div className="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={44} aria-valuemax={maximum} aria-valuenow={width} aria-valuetext={expanded ? `${Math.round(width)} pixels` : 'Collapsed'} tabIndex={0}
       onPointerDown={startDrag}
@@ -82,8 +119,8 @@ export function Sidebar({ activeId, items }: SidebarProps) {
         if (event.key === 'Enter') onToggle()
         else if (event.key === 'Home') resize(44)
         else if (event.key === 'End') resize(maximum)
-        else if (event.key === 'ArrowRight') resize(expanded ? width + 20 : 140)
-        else resize(width <= 140 ? 44 : width - 20)
+        else if (event.key === 'ArrowRight') resize(expanded ? width + 20 : 160)
+        else resize(width <= 160 ? 44 : width - 20)
       }} />
   </aside>
 }
