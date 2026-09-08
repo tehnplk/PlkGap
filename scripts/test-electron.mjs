@@ -95,7 +95,7 @@ try {
   await expect(importWindow.getByRole('button', { name: 'ล้างประวัติ' })).toHaveCount(0)
   await expect(importWindow.locator('.section-title')).toHaveText('ประวัติการนำเข้า')
   assert.deepEqual(await importWindow.locator('thead th').allInnerTexts(),
-    ['#', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'แถว', 'สถานะ', 'คุณภาพโครงสร้าง'])
+    ['ลำดับ', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'แถว', 'สถานะ'])
   // Child window titles carry the page component that renders them.
   await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - Import52Files')
 
@@ -148,47 +148,7 @@ try {
   await expect(importButton).toBeDisabled()
   await expect(importWindow.getByLabel('เลือกไฟล์')).toHaveValue('', { timeout: 10000 })
 
-  // ตรวจสอบคุณภาพโครงสร้าง checks the imported rows against c_files_schema and stores the result.
-  await run.getByRole('button', { name: 'ตรวจสอบคุณภาพโครงสร้าง' }).click()
-  await expect(importWindow.locator('.section-title').last())
-    .toHaveText('ผลตรวจคุณภาพโครงสร้าง — F43_07494_20260819111824.ZIP', { timeout: 60000 })
-  const findingTable = importWindow.locator('table[aria-label="ผลตรวจคุณภาพโครงสร้าง"]')
-  const findings = findingTable.locator('tbody tr')
-  await expect(findingTable).toContainText('ความยาวเกิน 5 อักขระ')
-  await expect(findingTable).toContainText('ห้ามเป็นค่าว่าง')
-  assert.deepEqual(await findingTable.locator('thead th').allInnerTexts(),
-    ['แฟ้ม', 'ฟิลด์', 'เกณฑ์', 'จำนวนแถว', 'ไม่ผ่านเงื่อนไข', 'ร้อยละ', 'ระดับ', ''])
-  // One row per file, all of it failing, so the share is 100.00 percent.
-  await expect(findings.first()).toContainText('100.00')
-  // The rows behind a finding can be listed, with the offending value in view.
-  await findings.first().getByRole('button', { name: 'ดูแถวที่ไม่ผ่าน' }).click()
-  const modal = importWindow.locator('dialog.large-modal')
-  const failingTable = modal.locator('table[aria-label="แถวที่ไม่ผ่านเงื่อนไข"]')
-  await expect(modal).toBeVisible()
-  await expect(modal).toContainText('แถวที่ไม่ผ่าน')
-  await expect(failingTable.locator('tbody tr')).toHaveCount(1)
-  // Service files always carry hospcode, pid, seq and their service date, whatever the primary key is.
-  const shownColumns = await failingTable.locator('thead th').allInnerTexts()
-  for (const column of ['HOSPCODE', 'PID', 'SEQ', 'DATETIME_SERV']) {
-    assert.ok(shownColumns.includes(column), `${column} is a standing column, got ${shownColumns.join(', ')}`)
-  }
-  // The modal is draggable by its header and closes from the X.
-  const beforeDrag = await modal.boundingBox()
-  const modalHeader = modal.locator('header')
-  const headerBox = await modalHeader.boundingBox()
-  await page.mouse.move(headerBox.x + 60, headerBox.y + headerBox.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(headerBox.x + 160, headerBox.y + headerBox.height / 2 + 40, { steps: 8 })
-  await page.mouse.up()
-  const afterDrag = await modal.boundingBox()
-  assert.ok(afterDrag.x > beforeDrag.x + 50 && afterDrag.y > beforeDrag.y + 20, 'The modal moves with its header')
-  await modal.getByRole('button', { name: 'ปิด', exact: true }).click()
-  await expect(modal).toBeHidden()
-  const firstCount = await findings.count()
-  assert.ok(firstCount > 0, 'the structure check reports what it found')
-  // Re-checking is allowed any time and replaces the previous result instead of piling up.
-  await run.getByRole('button', { name: 'ตรวจสอบคุณภาพโครงสร้าง' }).click()
-  await expect(findings).toHaveCount(firstCount, { timeout: 60000 })
+  await expect(importWindow.getByRole('button', { name: /ตรวจ.*โครงสร้าง/ })).toHaveCount(0)
   await page.screenshot({ path: 'artifacts/plkgap-import.png', fullPage: true })
 
   // ปริมาณข้อมูล: a fiscal year runs October to September, so the grid is 12 months plus a total.
@@ -207,6 +167,12 @@ try {
   assert.deepEqual(fiscalYears.map(Number), [0, 1, 2, 3, 4].map((back) => Number(fiscalYears[0]) - back),
     'five fiscal years counting back from the current one')
   await expect(dataCount).toContainText('d_update')
+  await dataCount.getByRole('button', { name: 'ปีงบ', exact: true }).click()
+  assert.deepEqual((await dataCount.locator('tbody tr td:first-child').allInnerTexts()).map(Number), fiscalYears.map(Number).reverse())
+  await expect(dataCount.getByRole('columnheader', { name: 'ปีงบ' })).toHaveAttribute('aria-sort', 'ascending')
+  await dataCount.getByRole('button', { name: 'ปีงบ', exact: true }).click()
+  assert.deepEqual(await dataCount.locator('tbody tr td:first-child').allInnerTexts(), fiscalYears)
+  await expect(dataCount.locator('thead th button')).toHaveCount(14)
   await page.screenshot({ path: 'artifacts/plkgap-data-count.png', fullPage: true })
   await dataCount.getByRole('button', { name: 'Close ปริมาณข้อมูล - DataCount' }).click()
   await expect(dataCount).toHaveCount(0)
@@ -301,11 +267,51 @@ try {
   await navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true }).click()
   const structure = page.getByRole('region', { name: 'ตรวจตามโครงสร้าง - StructureCheckPage window' })
   await expect(structure).toBeVisible()
-  await expect(structure.locator('tbody tr')).toHaveCount(7)
+  const structureRuns = structure.locator('table[aria-label="ไฟล์สำหรับตรวจตามโครงสร้าง"] tbody tr')
+  await expect(structureRuns).toHaveCount(1)
+  assert.deepEqual(await structure.locator('table[aria-label="ไฟล์สำหรับตรวจตามโครงสร้าง"] thead th').allInnerTexts(),
+    ['ลำดับ', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'แถว', 'ตรวจสอบ'])
+  await expect(structureRuns.first()).toContainText('F43_07494_20260819111824.ZIP')
+  await structureRuns.first().getByRole('button', { name: 'ตรวจตามโครงสร้าง' }).click()
+  await expect(structure.locator('.section-title').last())
+    .toHaveText('ผลตรวจ — F43_07494_20260819111824.ZIP', { timeout: 60000 })
+  const findingTable = structure.locator('table[aria-label="ผลตรวจตามโครงสร้าง"]')
+  const findings = findingTable.locator('tbody tr')
+  await expect(findingTable).toContainText('ความยาวเกิน 5 อักขระ')
+  await expect(findingTable).toContainText('ห้ามเป็นค่าว่าง')
+  assert.deepEqual(await findingTable.locator('thead th').allInnerTexts(),
+    ['แฟ้ม', 'ฟิลด์', 'เกณฑ์', 'จำนวนแถว', 'ไม่ผ่าน', 'ร้อยละ', 'ระดับ', 'การทำงาน'])
+  await expect(findings.first()).toContainText('100.00')
+  const firstCount = await findings.count()
+  assert.ok(firstCount > 0, 'the structure check reports what it found')
   await structure.getByLabel('กรองระดับ').selectOption('error')
-  await expect(structure.locator('tbody tr')).toHaveCount(3)
+  await expect(findings).toHaveCount(firstCount)
+  await structure.getByLabel('กรองระดับ').selectOption('warning')
+  await expect(structure).toContainText('ไม่พบรายการในระดับที่เลือก')
   await structure.getByLabel('กรองระดับ').selectOption('all')
-  await expect(structure.locator('tbody tr')).toHaveCount(7)
+  await expect(findings).toHaveCount(firstCount)
+  await findings.first().getByRole('button', { name: 'ดูแถวที่ไม่ผ่าน' }).click()
+  const modal = structure.locator('dialog.large-modal')
+  const failingTable = modal.locator('table[aria-label="แถวที่ไม่ผ่านเงื่อนไข"]')
+  await expect(modal).toBeVisible()
+  await expect(failingTable.locator('tbody tr')).toHaveCount(1)
+  const shownColumns = await failingTable.locator('thead th').allInnerTexts()
+  for (const column of ['HOSPCODE', 'PID', 'SEQ', 'DATETIME_SERV']) {
+    assert.ok(shownColumns.includes(column), `${column} is a standing column, got ${shownColumns.join(', ')}`)
+  }
+  const beforeDrag = await modal.boundingBox()
+  const modalHeader = modal.locator('header')
+  const headerBox = await modalHeader.boundingBox()
+  await page.mouse.move(headerBox.x + 60, headerBox.y + headerBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(headerBox.x + 160, headerBox.y + headerBox.height / 2 + 40, { steps: 8 })
+  await page.mouse.up()
+  const afterDrag = await modal.boundingBox()
+  assert.ok(afterDrag.x > beforeDrag.x + 50 && afterDrag.y > beforeDrag.y + 20, 'The modal moves with its header')
+  await modal.getByRole('button', { name: 'ปิด', exact: true }).click()
+  await expect(modal).toBeHidden()
+  await structureRuns.first().getByRole('button', { name: 'ตรวจตามโครงสร้าง' }).click()
+  await expect(findings).toHaveCount(firstCount, { timeout: 60000 })
   await page.screenshot({ path: 'artifacts/plkgap-structure-check.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true }).click()

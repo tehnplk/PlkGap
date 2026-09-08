@@ -1,24 +1,85 @@
-import { useState } from 'react'
+import { SortableTable } from '../../SortableTable'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { PointerEvent } from 'react'
+import type { FailingRows, ImportLogEntry, StructureCheckResult, StructureFinding } from '../../../../shared/api'
 import { Icon } from '../../Icon'
 
-interface Issue { id: number; file: string; column: string; rule: string; found: number; level: 'error' | 'warning' | 'passed' }
-
-const ISSUES: Issue[] = [
-  { id: 1, file: 'PERSON', column: 'CID', rule: 'ต้องเป็นตัวเลข 13 หลัก', found: 42, level: 'error' },
-  { id: 2, file: 'PERSON', column: 'BIRTH', rule: 'รูปแบบวันที่ YYYYMMDD', found: 8, level: 'error' },
-  { id: 3, file: 'HOME', column: 'HID', rule: 'ห้ามเป็นค่าว่าง', found: 3, level: 'error' },
-  { id: 4, file: 'SERVICE', column: 'SEQ', rule: 'ต้องไม่ซ้ำภายในแฟ้ม', found: 17, level: 'warning' },
-  { id: 5, file: 'DIAGNOSIS_OPD', column: 'DIAGCODE', rule: 'ความยาวไม่เกิน 6 อักขระ', found: 0, level: 'passed' },
-  { id: 6, file: 'DRUG_OPD', column: 'DIDSTD', rule: 'ต้องอยู่ในรหัสยามาตรฐาน 24 หลัก', found: 129, level: 'warning' },
-  { id: 7, file: 'CHRONIC', column: 'DATE_DIAG', rule: 'ต้องไม่เป็นวันที่ในอนาคต', found: 0, level: 'passed' },
-]
-const levelLabel: Record<Issue['level'], string> = { error: 'ไม่ผ่าน', warning: 'ควรแก้ไข', passed: 'ผ่าน' }
+const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+const megabytes = (bytes: number) => (bytes / 1048576).toFixed(2)
+const levelLabel: Record<string, string> = { error: 'ไม่ผ่าน', warning: 'ควรแก้ไข' }
 
 export function StructureCheckPage() {
-  const [level, setLevel] = useState<'all' | Issue['level']>('all')
-  const rows = ISSUES.filter((issue) => level === 'all' || issue.level === level)
-  const errors = ISSUES.filter((issue) => issue.level === 'error').length
-  const warnings = ISSUES.filter((issue) => issue.level === 'warning').length
+  const [log, setLog] = useState<ImportLogEntry[]>([])
+  const [structure, setStructure] = useState<StructureCheckResult | null>(null)
+  const [checkingZip, setCheckingZip] = useState('')
+  const [level, setLevel] = useState<'all' | 'error' | 'warning'>('all')
+  const [failing, setFailing] = useState<FailingRows | null>(null)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [error, setError] = useState('')
+  const failingDialog = useRef<HTMLDialogElement>(null)
+
+  const reload = useCallback(() => {
+    window.api.listImportLog()
+      .then((rows) => { setLog(rows); setError('') })
+      .catch((reason: unknown) => setError(String(reason)))
+  }, [])
+
+  useEffect(reload, [reload])
+  useEffect(() => {
+    const dialog = failingDialog.current
+    if (!dialog) return
+    if (failing && !dialog.open) { setOffset({ x: 0, y: 0 }); dialog.showModal() }
+    if (!failing && dialog.open) dialog.close()
+  }, [failing])
+
+  function moveModal(event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return
+    event.preventDefault()
+    const target = event.currentTarget
+    target.setPointerCapture(event.pointerId)
+    const startX = event.clientX - offset.x
+    const startY = event.clientY - offset.y
+    const onMove = (next: globalThis.PointerEvent) => setOffset({ x: next.clientX - startX, y: next.clientY - startY })
+    const stop = () => {
+      target.removeEventListener('pointermove', onMove)
+      target.removeEventListener('pointerup', stop)
+      target.removeEventListener('pointercancel', stop)
+      target.removeEventListener('lostpointercapture', stop)
+    }
+    target.addEventListener('pointermove', onMove)
+    target.addEventListener('pointerup', stop)
+    target.addEventListener('pointercancel', stop)
+    target.addEventListener('lostpointercapture', stop)
+  }
+
+  async function checkZip(zipName: string) {
+    setCheckingZip(zipName)
+    setStructure(null)
+    setFailing(null)
+    setLevel('all')
+    setError('')
+    try {
+      setStructure(await window.api.checkStructure(zipName))
+    } catch (reason: unknown) {
+      setError(String(reason))
+    } finally {
+      setCheckingZip('')
+    }
+  }
+
+  async function showFailing(finding: StructureFinding) {
+    if (!structure) return
+    setFailing(null)
+    try {
+      setFailing(await window.api.failingRows(structure.zipName, finding.tableName, finding.columnName, finding.rule))
+    } catch (reason: unknown) {
+      setError(String(reason))
+    }
+  }
+
+  const findings = structure?.findings.filter((finding) => level === 'all' || finding.level === level) ?? []
+  const errors = structure?.findings.filter((finding) => finding.level === 'error').length ?? 0
+  const warnings = structure?.findings.filter((finding) => finding.level === 'warning').length ?? 0
 
   return <>
     <div className="content-heading">
@@ -26,44 +87,100 @@ export function StructureCheckPage() {
         <p className="eyebrow">ระบบ 43 แฟ้ม</p>
         <h2>ตรวจตามโครงสร้าง</h2>
       </div>
-      <span className={`badge ${errors ? 'error' : ''}`}>{errors ? `ไม่ผ่าน ${errors} รายการ` : 'ผ่านทั้งหมด'}</span>
+      {structure && <span className={`badge ${structure.findings.length ? 'error' : ''}`}>
+        {structure.findings.length ? `พบ ${structure.findings.length} รายการ` : 'ผ่านทุกเกณฑ์'}
+      </span>}
     </div>
-    <p>ตรวจชนิดข้อมูล ความยาว รูปแบบวันที่ และคีย์ซ้ำ ตามโครงสร้างมาตรฐานของแต่ละแฟ้ม</p>
+    <p>เลือกไฟล์ที่นำเข้าแล้วเพื่อตรวจชนิดข้อมูล ความยาว รูปแบบวันที่ และคีย์ซ้ำ ตามพจนานุกรมข้อมูล 43 แฟ้ม</p>
 
-    <div className="toolbar-row">
-      <button type="button" className="mock-button primary"><Icon name="structure" size={15} />ตรวจสอบใหม่</button>
-      <button type="button" className="mock-button">ส่งออกผลตรวจ (CSV)</button>
-      <label htmlFor="structure-level" style={{ marginLeft: 'auto' }}>กรองระดับ</label>
-      <select id="structure-level" className="mock-select" value={level} onChange={(event) => setLevel(event.target.value as typeof level)}>
-        <option value="all">ทั้งหมด</option>
-        <option value="error">ไม่ผ่าน</option>
-        <option value="warning">ควรแก้ไข</option>
-        <option value="passed">ผ่าน</option>
-      </select>
-    </div>
-
-    <div className="stat-grid">
-      <div className="stat-card"><small>กฎที่ตรวจ</small><strong>{ISSUES.length}</strong></div>
-      <div className="stat-card"><small>ไม่ผ่าน</small><strong>{errors}</strong></div>
-      <div className="stat-card"><small>ควรแก้ไข</small><strong>{warnings}</strong></div>
-      <div className="stat-card"><small>ตรวจเมื่อ</small><strong>08 ก.ย. 69</strong></div>
-    </div>
-
+    <p className="section-title">ไฟล์ที่นำเข้าแล้ว</p>
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ผลตรวจตามโครงสร้าง">
-        <thead><tr><th className="col-right">#</th><th>แฟ้ม</th><th>ฟิลด์</th><th>กฎที่ใช้ตรวจ</th><th className="col-right">พบ (เรคคอร์ด)</th><th className="col-center">ผล</th></tr></thead>
+      <SortableTable className="data-table" aria-label="ไฟล์สำหรับตรวจตามโครงสร้าง">
+        <thead><tr><th className="col-right">ลำดับ</th><th className="import-datetime">วัน-เวลานำเข้า</th><th>ชื่อไฟล์</th><th className="col-right">File Size (MB)</th><th className="col-right">แถว</th><th className="col-center">ตรวจสอบ</th></tr></thead>
         <tbody>
-          {rows.map((issue) => <tr key={issue.id}>
-            <td className="col-right num-cell">{issue.id}</td>
-            <td className="code-cell"><code>{issue.file}</code></td>
-            <td className="name-cell"><strong>{issue.column}</strong></td>
-            <td>{issue.rule}</td>
-            <td className="col-right num-cell">{issue.found.toLocaleString()}</td>
-            <td className="col-center"><span className={`status-pill status-${issue.level}`}>{levelLabel[issue.level]}</span></td>
+          {log.map((row, index) => <tr key={row.id}>
+            <td className="col-right num-cell">{log.length - index}</td>
+            <td className="num-cell import-datetime" data-sort-value={new Date(row.startedAt).getTime()}>{when.format(new Date(row.startedAt))}</td>
+            <td className="code-cell"><code>{row.fileName}</code></td>
+            <td className="col-right num-cell">{megabytes(row.fileSize)}</td>
+            <td className="col-right num-cell">{row.rowCount.toLocaleString('en-US')}</td>
+            <td className="col-center">
+              <button type="button" className="mock-button primary" disabled={row.status !== 'complete' || !!checkingZip}
+                onClick={() => void checkZip(row.fileName)}>
+                <Icon name="structure" size={15} />
+                {checkingZip === row.fileName ? 'กำลังตรวจ...' : 'ตรวจตามโครงสร้าง'}
+              </button>
+            </td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
-    <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) กฎการตรวจจริงจะอ่านจากพจนานุกรมข้อมูล 43 แฟ้ม</p></div>
+    {error && <p className="hint-text" role="alert">{error}</p>}
+    {!error && !log.length && <p className="hint-text">ยังไม่มีข้อมูลที่นำเข้า</p>}
+
+    {structure && <>
+      <div className="toolbar-row">
+        <p className="section-title">ผลตรวจ — {structure.zipName}</p>
+        <label htmlFor="structure-level" style={{ marginLeft: 'auto' }}>กรองระดับ</label>
+        <select id="structure-level" className="mock-select" value={level} onChange={(event) => setLevel(event.target.value as typeof level)}>
+          <option value="all">ทั้งหมด</option>
+          <option value="error">ไม่ผ่าน</option>
+          <option value="warning">ควรแก้ไข</option>
+        </select>
+      </div>
+
+      <div className="stat-grid">
+        <div className="stat-card"><small>กฎที่ตรวจ</small><strong>{structure.rules.toLocaleString('en-US')}</strong></div>
+        <div className="stat-card"><small>แถวที่ตรวจ</small><strong>{structure.rows.toLocaleString('en-US')}</strong></div>
+        <div className="stat-card"><small>ไม่ผ่าน</small><strong>{errors}</strong></div>
+        <div className="stat-card"><small>ควรแก้ไข</small><strong>{warnings}</strong></div>
+      </div>
+
+      {!!structure.findings.length && <div className="table-wrapper">
+        <SortableTable className="data-table" aria-label="ผลตรวจตามโครงสร้าง">
+          <thead><tr><th>แฟ้ม</th><th>ฟิลด์</th><th>เกณฑ์</th><th className="col-right">จำนวนแถว</th><th className="col-right">ไม่ผ่าน</th><th className="col-right">ร้อยละ</th><th className="col-center">ระดับ</th><th className="col-center"></th></tr></thead>
+          <tbody>
+            {findings.map((finding) => <tr key={`${finding.tableName}-${finding.columnName}-${finding.rule}`}>
+              <td className="code-cell"><code>{finding.tableName.toUpperCase()}</code></td>
+              <td className="name-cell"><strong>{finding.columnName.toUpperCase()}</strong></td>
+              <td>{finding.detail}</td>
+              <td className="col-right num-cell">{finding.tableRows.toLocaleString('en-US')}</td>
+              <td className="col-right num-cell">{finding.found.toLocaleString('en-US')}</td>
+              <td className="col-right num-cell">{finding.tableRows ? ((finding.found / finding.tableRows) * 100).toFixed(2) : '-'}</td>
+              <td className="col-center"><span className={`status-pill status-${finding.level}`}>{levelLabel[finding.level] ?? finding.level}</span></td>
+              <td className="col-center"><button type="button" className="mock-button" onClick={() => void showFailing(finding)}>ดูแถวที่ไม่ผ่าน</button></td>
+            </tr>)}
+          </tbody>
+        </SortableTable>
+      </div>}
+      {!structure.findings.length && <p className="hint-text">ข้อมูลผ่านทุกเกณฑ์ตามโครงสร้าง</p>}
+      {!!structure.findings.length && !findings.length && <p className="hint-text">ไม่พบรายการในระดับที่เลือก</p>}
+    </>}
+
+    <dialog className="large-modal" ref={failingDialog} onClose={() => setFailing(null)}
+      style={{ translate: `${offset.x}px ${offset.y}px` }}
+      onClick={(event) => { if (event.target === failingDialog.current) setFailing(null) }}>
+      {failing && <>
+        <header onPointerDown={moveModal}>
+          <div>
+            <strong>แถวที่ไม่ผ่าน — {failing.tableName.toUpperCase()}.{failing.columnName.toUpperCase()}</strong>
+            <small>{failing.detail} · แสดง {failing.rows.length.toLocaleString('en-US')} จาก {failing.total.toLocaleString('en-US')} แถว</small>
+          </div>
+          <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => setFailing(null)}>
+            <Icon name="close" size={16} />
+          </button>
+        </header>
+        <div className="table-wrapper">
+          <SortableTable className="data-table" aria-label="แถวที่ไม่ผ่านเงื่อนไข">
+            <thead><tr>{failing.columns.map((name) => <th key={name}>{name.toUpperCase()}</th>)}</tr></thead>
+            <tbody>
+              {failing.rows.map((row, index) => <tr key={index}>
+                {row.map((value, column) => <td key={failing.columns[column]} className="num-cell">{value === '' ? <em>(ว่าง)</em> : value}</td>)}
+              </tr>)}
+            </tbody>
+          </SortableTable>
+        </div>
+      </>}
+    </dialog>
   </>
 }

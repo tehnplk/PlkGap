@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -48,7 +49,7 @@ export function StandardCheckPage() {
     </div>
 
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ผลตรวจตามหลักวิชาการ">
+      <SortableTable className="data-table" aria-label="ผลตรวจตามหลักวิชาการ">
         <thead><tr><th>รหัสเกณฑ์</th><th>หัวข้อ</th><th>เงื่อนไข</th><th className="col-right">จำนวนเคส</th><th className="col-center">ผล</th></tr></thead>
         <tbody>
           {rows.map((rule) => <tr key={rule.id}>
@@ -59,7 +60,7 @@ export function StandardCheckPage() {
             <td className="col-center"><span className={`status-pill status-${rule.level}`}>{levelLabel[rule.level]}</span></td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) เกณฑ์จริงอ้างอิงแนวทางของกรมวิชาการและ สปสช.</p></div>
   </>

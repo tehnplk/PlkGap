@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -50,7 +51,7 @@ export function RevenueTemplatePage() {
     </div>
 
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ตารางรายได้แยกตามกองทุน">
+      <SortableTable className="data-table" aria-label="ตารางรายได้แยกตามกองทุน">
         <thead><tr><th>กองทุน</th><th className="col-right">เรียกเก็บ (บาท)</th><th className="col-right">อนุมัติ (บาท)</th><th className="col-right">ปฏิเสธ (บาท)</th><th className="col-center">สถานะ</th></tr></thead>
         <tbody>
           {REVENUE.map((row) => <tr key={row.fund}>
@@ -61,7 +62,7 @@ export function RevenueTemplatePage() {
             <td className="col-center"><span className={`status-pill status-${row.state}`}>{stateLabel[row.state]}</span></td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) ยอดจริงจะดึงจากไฟล์ตอบกลับ (REP) ของแต่ละกองทุน</p></div>
   </>

@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -54,7 +55,7 @@ export function DenguePage() {
     </div>
 
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ตารางผู้ป่วยไข้เลือดออกรายหมู่บ้าน">
+      <SortableTable className="data-table" aria-label="ตารางผู้ป่วยไข้เลือดออกรายหมู่บ้าน">
         <thead><tr><th>รหัส</th><th>หมู่บ้าน</th><th className="col-right">ผู้ป่วย</th><th className="col-right">ประชากร</th><th>วันเริ่มป่วยล่าสุด</th><th className="col-center">สถานะ</th></tr></thead>
         <tbody>
           {VILLAGES.map((village) => <tr key={village.code}>
@@ -66,7 +67,7 @@ export function DenguePage() {
             <td className="col-center"><span className={`status-pill status-${village.state}`}>{stateLabel[village.state]}</span></td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) ของจริงจะดึงจากแฟ้ม DIAGNOSIS_OPD/IPD และรายงาน 506</p></div>
   </>

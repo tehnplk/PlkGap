@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -48,7 +49,7 @@ export function SubHdcPage() {
 
     <p className="section-title">ประวัติการส่งข้อมูล</p>
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ประวัติการส่งข้อมูลไป SUB-HDC">
+      <SortableTable className="data-table" aria-label="ประวัติการส่งข้อมูลไป SUB-HDC">
         <thead><tr><th>เวลา</th><th>งาน</th><th className="col-right">เรคคอร์ด</th><th className="col-center">ผล</th></tr></thead>
         <tbody>
           {HISTORY.map((row) => <tr key={row.time}>
@@ -58,7 +59,7 @@ export function SubHdcPage() {
             <td className="col-center"><span className={`status-pill status-${row.state}`}>{stateLabel[row.state]}</span></td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) token จริงต้องเก็บและเรียกใช้ใน main process</p></div>
   </>

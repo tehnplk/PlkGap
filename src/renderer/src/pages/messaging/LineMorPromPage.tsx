@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -56,7 +57,7 @@ export function LineMorPromPage() {
 
     <p className="section-title">ประวัติการส่ง</p>
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ประวัติการส่งข้อความ">
+      <SortableTable className="data-table" aria-label="ประวัติการส่งข้อความ">
         <thead><tr><th>เวลา</th><th>กลุ่มเป้าหมาย</th><th className="col-right">ส่งสำเร็จ</th><th className="col-right">ล้มเหลว</th><th className="col-center">สถานะ</th></tr></thead>
         <tbody>
           {LOGS.map((log) => <tr key={log.time}>
@@ -67,7 +68,7 @@ export function LineMorPromPage() {
             <td className="col-center"><span className={`status-pill status-${log.state}`}>{stateLabel[log.state]}</span></td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) การส่งจริงต้องเรียก API ผ่าน main process เพราะมี access token</p></div>
   </>

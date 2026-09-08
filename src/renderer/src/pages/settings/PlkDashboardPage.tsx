@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -44,7 +45,7 @@ export function PlkDashboardPage() {
 
     <p className="section-title">ชุดข้อมูลที่เผยแพร่</p>
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ชุดข้อมูลที่ส่งขึ้น PLK Dashboard">
+      <SortableTable className="data-table" aria-label="ชุดข้อมูลที่ส่งขึ้น PLK Dashboard">
         <thead><tr><th>ชุดข้อมูล</th><th>ความถี่</th><th>ส่งล่าสุด</th><th className="col-center">สถานะ</th></tr></thead>
         <tbody>
           {FEEDS.map((feed) => <tr key={feed.id}>
@@ -54,7 +55,7 @@ export function PlkDashboardPage() {
             <td className="col-center"><span className={`status-pill status-${feed.state}`}>{stateLabel[feed.state]}</span></td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) API key จริงต้องเก็บและเรียกใช้ใน main process</p></div>
   </>

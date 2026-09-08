@@ -157,6 +157,7 @@ svg { flex-shrink: 0; }
 .data-table tbody tr:last-child { border-bottom: 0; }
 .data-table tbody tr:hover { background-color: #faf6fe; }
 .data-table td { padding: 7px 10px; vertical-align: middle; }
+.data-table thead th.import-datetime, .data-table td.import-datetime { padding-left: 24px; white-space: nowrap; }
 .col-right { text-align: right; }
 .col-center { text-align: center; }
 .col-left { text-align: left; }
@@ -168,4 +169,3 @@ svg { flex-shrink: 0; }
 .status-warning { background: #fef5e7; color: #b25e00; }
 .status-error { background: #fce8e8; color: #a83030; }
 .status-pending { background: #f3eef9; color: #746582; }
-

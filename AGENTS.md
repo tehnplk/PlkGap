@@ -28,6 +28,14 @@
 4. เพิ่ม conditional render ใน `.window-content` และเงื่อนไข `flush` ถ้าต้องเต็มกรอบ
 5. เพิ่ม Kind ใน `groups` ถ้าต้องแสดง sidebar; เพิ่มคำสั่ง File/เกี่ยวกับเองถ้าต้องการ ส่วนเมนู Window มาจากหน้าต่างที่เปิดอยู่โดยอัตโนมัติ
 
+## Data grid: shared component
+
+- ทุก data grid ทั้งใน page และ dialog ต้องใช้ `SortableTable` จาก `src/renderer/src/SortableTable.tsx`; ห้ามสร้าง `<table>` สำหรับ data grid หรือเขียน logic sort ซ้ำในแต่ละหน้า
+- ทุกหัวคอลัมน์ต้องคลิกสลับ ASC/DESC ได้ พร้อมตัวบอกทิศทางและ `aria-sort`; ดูแลพฤติกรรมนี้ที่ shared component แห่งเดียว
+- แต่ละหน้ารับผิดชอบโหลด/กรองข้อมูลและกำหนดคอลัมน์ ส่วน state การ sort อยู่ในแต่ละ instance ของ `SortableTable` ห้ามย้ายไป `App.tsx`
+- ค่าที่แสดงต่างจากค่าที่ใช้เรียง ให้ส่ง `data-sort-value` บน cell เช่น timestamp สำหรับวันเวลา หรือเลขจริงสำหรับค่าที่แสดงเป็น `-`; เรียงตัวเลขและวันเวลาตามค่า ไม่ใช่ข้อความที่จัดรูปแบบ
+- เพิ่ม data grid ใหม่หรือปรับพฤติกรรมร่วม ต้องใช้/แก้ shared component นี้ เพื่อให้ทุกหน้าทำงานเหมือนกัน
+
 ## เวอร์ชัน
 
 - `package.json` field `version` เป็นแหล่งเดียว ห้ามสร้างไฟล์เวอร์ชันแยกหรือ hardcode ที่อื่น

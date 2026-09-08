@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useState } from 'react'
 import { Icon } from '../../Icon'
 
@@ -45,7 +46,7 @@ export function IndicatorTemplatePage() {
     </div>
 
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ตารางตัวชี้วัด">
+      <SortableTable className="data-table" aria-label="ตารางตัวชี้วัด">
         <thead><tr><th>รหัส</th><th>ชื่อตัวชี้วัด</th><th>ผู้รับผิดชอบ</th><th className="col-right">เป้าหมาย</th><th className="col-right">ผลงาน</th><th>ความคืบหน้า</th></tr></thead>
         <tbody>
           {rows.map((item) => {
@@ -62,7 +63,7 @@ export function IndicatorTemplatePage() {
             </tr>
           })}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) สูตรคำนวณจริงจะเก็บเป็นเทมเพลต SQL ต่อหนึ่งตัวชี้วัด</p></div>
   </>

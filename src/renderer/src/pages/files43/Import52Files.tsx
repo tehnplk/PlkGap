@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PointerEvent } from 'react'
-import type { FailingRows, ImportCheck, ImportLogEntry, StructureCheckResult, StructureFinding } from '../../../../shared/api'
+import { SortableTable } from '../../SortableTable'
+import { useCallback, useEffect, useState } from 'react'
+import type { ImportCheck, ImportLogEntry } from '../../../../shared/api'
 import { Icon } from '../../Icon'
 
 const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
@@ -15,11 +15,6 @@ export function Import52Files() {
   const [check, setCheck] = useState<ImportCheck | null>(null)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState<ImportLogEntry[]>([])
-  const [structure, setStructure] = useState<StructureCheckResult | null>(null)
-  const [checkingZip, setCheckingZip] = useState('')
-  const [failing, setFailing] = useState<FailingRows | null>(null)
-  const failingDialog = useRef<HTMLDialogElement>(null)
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [error, setError] = useState('')
 
   const reload = useCallback(() => {
@@ -32,35 +27,6 @@ export function Import52Files() {
     setPercent(update.percent)
     setProgress(`กำลังนำเข้า ${update.file} — ${update.rowCount.toLocaleString('en-US')} แถว`)
   }), [])
-
-  // The failing rows get the whole app window: a native modal, so Esc and focus trapping come free.
-  useEffect(() => {
-    const dialog = failingDialog.current
-    if (!dialog) return
-    if (failing && !dialog.open) { setOffset({ x: 0, y: 0 }); dialog.showModal() }
-    if (!failing && dialog.open) dialog.close()
-  }, [failing])
-
-  /** Drag the modal by its header, the same way a child window moves. */
-  function moveModal(event: PointerEvent<HTMLElement>) {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return
-    event.preventDefault()
-    const target = event.currentTarget
-    target.setPointerCapture(event.pointerId)
-    const startX = event.clientX - offset.x
-    const startY = event.clientY - offset.y
-    const onMove = (next: globalThis.PointerEvent) => setOffset({ x: next.clientX - startX, y: next.clientY - startY })
-    const stop = () => {
-      target.removeEventListener('pointermove', onMove)
-      target.removeEventListener('pointerup', stop)
-      target.removeEventListener('pointercancel', stop)
-      target.removeEventListener('lostpointercapture', stop)
-    }
-    target.addEventListener('pointermove', onMove)
-    target.addEventListener('pointerup', stop)
-    target.addEventListener('pointercancel', stop)
-    target.addEventListener('lostpointercapture', stop)
-  }
 
   const inspect = useCallback(async (target: string) => {
     setPath(target)
@@ -79,30 +45,6 @@ export function Import52Files() {
       setBusy(false)
     }
   }, [])
-
-  async function showFailing(finding: StructureFinding) {
-    if (!structure) return
-    setFailing(null)
-    try {
-      setFailing(await window.api.failingRows(structure.zipName, finding.tableName, finding.columnName, finding.rule))
-    } catch (reason: unknown) {
-      setError(String(reason))
-    }
-  }
-
-  // Checked by zip name, so re-importing the same file does not hide the rows it first brought in.
-  async function checkZip(zipName: string) {
-    setCheckingZip(zipName)
-    setStructure(null)
-    setFailing(null)
-    try {
-      setStructure(await window.api.checkStructure(zipName))
-    } catch (reason: unknown) {
-      setError(String(reason))
-    } finally {
-      setCheckingZip('')
-    }
-  }
 
   async function browse() {
     const chosen = await window.api.chooseImportFile()
@@ -168,117 +110,33 @@ export function Import52Files() {
     <p className="section-title">ประวัติการนำเข้า</p>
 
     <div className="table-wrapper">
-      <table className="data-table" aria-label="ประวัติการนำเข้า">
+      <SortableTable className="data-table" aria-label="ประวัติการนำเข้า">
         <thead>
           <tr>
-            <th className="col-right">#</th>
-            <th>วัน-เวลานำเข้า</th>
+            <th className="col-right">ลำดับ</th>
+            <th className="import-datetime">วัน-เวลานำเข้า</th>
             <th>ชื่อไฟล์</th>
             <th className="col-right">File Size (MB)</th>
             <th className="col-right">แถว</th>
             <th className="col-center">สถานะ</th>
-            <th className="col-center">คุณภาพโครงสร้าง</th>
           </tr>
         </thead>
         <tbody>
           {log.map((row, index) => <tr key={row.id}>
-            <td className="col-right num-cell">{index + 1}</td>
-            <td className="num-cell">{when.format(new Date(row.startedAt))}</td>
+            <td className="col-right num-cell">{log.length - index}</td>
+            <td className="num-cell import-datetime" data-sort-value={new Date(row.startedAt).getTime()}>{when.format(new Date(row.startedAt))}</td>
             <td className="code-cell"><code>{row.fileName}</code></td>
             <td className="col-right num-cell">{megabytes(row.fileSize)}</td>
             <td className="col-right num-cell">{row.rowCount.toLocaleString('en-US')}</td>
             <td className="col-center">
               <span className={`status-pill status-${statusStyle[row.status] ?? 'pending'}`}>{statusLabel[row.status] ?? row.status}</span>
             </td>
-            <td className="col-center">
-              <button type="button" className="mock-button" disabled={checkingZip === row.fileName}
-                onClick={() => void checkZip(row.fileName)}>
-                {checkingZip === row.fileName ? 'กำลังตรวจ...' : 'ตรวจสอบคุณภาพโครงสร้าง'}
-              </button>
-            </td>
           </tr>)}
         </tbody>
-      </table>
+      </SortableTable>
     </div>
     {error && <p className="hint-text" role="alert">{error}</p>}
     {!error && !log.length && <p className="hint-text">ยังไม่มีประวัติการนำเข้า</p>}
 
-    {structure && <>
-      <div className="toolbar-row">
-        <p className="section-title">ผลตรวจคุณภาพโครงสร้าง — {structure.zipName}</p>
-        <span className={`badge ${structure.findings.length ? 'error' : ''}`} style={{ marginLeft: 'auto' }}>
-          {structure.findings.length ? `พบ ${structure.findings.length} รายการ` : 'ผ่านทุกเกณฑ์'}
-        </span>
-      </div>
-      <p className="hint-text">
-        ตรวจ {structure.rows.toLocaleString('en-US')} แถว ด้วย {structure.rules.toLocaleString('en-US')} เกณฑ์
-        จากพจนานุกรมข้อมูล <code>c_files_schema</code>
-      </p>
-      {!!structure.findings.length && <div className="table-wrapper">
-        <table className="data-table" aria-label="ผลตรวจคุณภาพโครงสร้าง">
-          <thead>
-            <tr>
-              <th>แฟ้ม</th>
-              <th>ฟิลด์</th>
-              <th>เกณฑ์</th>
-              <th className="col-right">จำนวนแถว</th>
-              <th className="col-right">ไม่ผ่านเงื่อนไข</th>
-              <th className="col-right">ร้อยละ</th>
-              <th className="col-center">ระดับ</th>
-              <th className="col-center"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {structure.findings.map((finding) => <tr key={`${finding.tableName}-${finding.columnName}-${finding.rule}`}>
-              <td className="code-cell"><code>{finding.tableName.toUpperCase()}</code></td>
-              <td className="name-cell"><strong>{finding.columnName.toUpperCase()}</strong></td>
-              <td>{finding.detail}</td>
-              <td className="col-right num-cell">{finding.tableRows.toLocaleString('en-US')}</td>
-              <td className="col-right num-cell">{finding.found.toLocaleString('en-US')}</td>
-              <td className="col-right num-cell">
-                {finding.tableRows ? ((finding.found / finding.tableRows) * 100).toFixed(2) : '-'}
-              </td>
-              <td className="col-center">
-                <span className={`status-pill status-${finding.level}`}>{finding.level === 'error' ? 'ไม่ผ่าน' : 'ควรแก้ไข'}</span>
-              </td>
-              <td className="col-center">
-                <button type="button" className="mock-button" onClick={() => void showFailing(finding)}>ดูแถวที่ไม่ผ่าน</button>
-              </td>
-            </tr>)}
-          </tbody>
-        </table>
-      </div>}
-
-    </>}
-
-    <dialog className="large-modal" ref={failingDialog} onClose={() => setFailing(null)}
-      style={{ translate: `${offset.x}px ${offset.y}px` }}
-      onClick={(event) => { if (event.target === failingDialog.current) setFailing(null) }}>
-      {failing && <>
-        <header onPointerDown={moveModal}>
-          <div>
-            <strong>แถวที่ไม่ผ่าน — {failing.tableName.toUpperCase()}.{failing.columnName.toUpperCase()}</strong>
-            <small>{failing.detail} · แสดง {failing.rows.length.toLocaleString('en-US')} จาก {failing.total.toLocaleString('en-US')} แถว</small>
-          </div>
-          <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => setFailing(null)}>
-            <Icon name="close" size={16} />
-          </button>
-        </header>
-        <div className="table-wrapper">
-          <table className="data-table" aria-label="แถวที่ไม่ผ่านเงื่อนไข">
-            <thead>
-              <tr>{failing.columns.map((name) => <th key={name}>{name.toUpperCase()}</th>)}</tr>
-            </thead>
-            <tbody>
-              {failing.rows.map((row, index) => <tr key={index}>
-                {row.map((value, column) => <td key={failing.columns[column]} className="num-cell">
-                  {value === '' ? <em>(ว่าง)</em> : value}
-                </td>)}
-              </tr>)}
-            </tbody>
-          </table>
-        </div>
-      </>}
-    </dialog>
   </>
 }

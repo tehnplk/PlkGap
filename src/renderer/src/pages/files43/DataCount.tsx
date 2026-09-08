@@ -1,3 +1,4 @@
+import { SortableTable } from '../../SortableTable'
 import { useCallback, useEffect, useState } from 'react'
 import type { DataCountResult } from '../../../../shared/api'
 
@@ -63,7 +64,7 @@ export function DataCount() {
 
     {count && <>
       <div className="table-wrapper">
-        <table className="data-table" aria-label="ปริมาณข้อมูลรายปีงบ">
+        <SortableTable className="data-table" aria-label="ปริมาณข้อมูลรายปีงบ">
           <thead>
             <tr>
               <th className="col-right">ปีงบ</th>
@@ -74,13 +75,13 @@ export function DataCount() {
           <tbody>
             {count.years.map((year) => <tr key={year.fiscalYear}>
               <td className="col-right num-cell"><strong>{year.fiscalYear}</strong></td>
-              {year.months.map((value, index) => <td key={MONTHS[index]} className="col-right num-cell">
+              {year.months.map((value, index) => <td key={MONTHS[index]} className="col-right num-cell" data-sort-value={value}>
                 {value ? value.toLocaleString('en-US') : '-'}
               </td>)}
               <td className="col-right num-cell"><strong>{year.total.toLocaleString('en-US')}</strong></td>
             </tr>)}
           </tbody>
-        </table>
+        </SortableTable>
       </div>
       <p className="hint-text">นับจากคอลัมน์ <code>{count.column}</code> ของแฟ้ม <code>{count.table}</code></p>
     </>}
