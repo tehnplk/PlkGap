@@ -10,6 +10,10 @@ const api: AppApi = {
   listStandardFiles: () => ipcRenderer.invoke('files:list'),
   countByFiscalYears: (table, years) => ipcRenderer.invoke('files:count-by-year', table, years),
   checkStructure: (zipName) => ipcRenderer.invoke('structure:check', zipName),
+  checkObservations: (zipName) => ipcRenderer.invoke('observations:check', zipName),
+  observationRows: (zipName, rule) => ipcRenderer.invoke('observations:rows', zipName, rule),
+  listObservationRules: () => ipcRenderer.invoke('observations:rules'),
+  setObservationRuleActive: (rule, active) => ipcRenderer.invoke('observations:set-active', rule, active),
   structureResult: (zipName) => ipcRenderer.invoke('structure:result', zipName),
   failingRows: (zipName, tableName, columnName, rule) =>
     ipcRenderer.invoke('structure:failing-rows', zipName, tableName, columnName, rule),

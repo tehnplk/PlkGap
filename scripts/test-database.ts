@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, databaseStatus, loadReferenceTables, createFileTables, createAppTables, listImportLog, startImportRun, insertStandardRows, loadGeographyTables } from '../src/main/database.ts'
 import type { FileStructure } from '../src/main/database.ts'
+import { checkObservations, observationRows, listObservationRules, setObservationRuleActive, syncObservationRules } from '../src/main/database.ts'
 import fileStructure from '../src/main/reference/f43-tables.json' with { type: 'json' }
 
 async function main() {
@@ -100,7 +101,7 @@ try {
   // Setup happens once: reopening the database must not redo or re-stamp any of it.
   const before = await db.query<{ component: string; initialized_at: Date }>(
     'SELECT component, initialized_at FROM schema_init ORDER BY component')
-  assert.deepEqual(before.rows.map((row) => row.component), ['app', 'files43', 'geography', 'reference'],
+  assert.deepEqual(before.rows.map((row) => row.component), ['app', 'files43', 'geography', 'observations', 'reference'],
     'every component is recorded')
   await db.close()
   db = await openDatabase(join(directory, 'db'))
@@ -196,6 +197,74 @@ try {
   ], 'a later file overwrites matching rows, re-stamps them, and adds the new ones')
   await db.query('DELETE FROM person')
   console.log('PASS: re-importing a key replaces the row instead of duplicating it')
+  const observationsRun = await startImportRun(db, { name: 'observations.zip', path: 'observations.zip', size: 1 })
+  const cidBase = '123456789012'
+  const validCid = cidBase + ((11 - [...cidBase].reduce((sum, digit, index) => sum + Number(digit) * (13 - index), 0) % 11) % 10)
+  const wrongCid = validCid.slice(0, 12) + ((Number(validCid[12]) + 1) % 10)
+  const personHeader = ['HOSPCODE', 'PID', 'CID', 'NATION', 'PRENAME', 'SEX', 'DISCHARGE', 'DDISCHARGE']
+  await insertStandardRows(db, second, 'person', personHeader, [
+    ['07488', 'D', validCid, '099', '003', '1', '1', '20260901'],
+    ['99999', 'D', validCid, '099', '003', '1', '1', '20200101'],
+  ])
+  await insertStandardRows(db, observationsRun, 'person', personHeader, [
+    ['07488', 'M', wrongCid, '099', '003', '2', '1', 'invalid'],
+    ['07488', 'F', 'invalid', '048', '129', '1', '2', '20200101'],
+    ['07488', 'U', '123', '099', '999', '9', '1', '20260230'],
+    ['07488', 'G', validCid, '099', '004', '2', '9', ''],
+  ])
+  const serviceHeader = ['HOSPCODE', 'PID', 'SEQ', 'DATE_SERV']
+  await insertStandardRows(db, observationsRun, 'service', serviceHeader, [
+    ['07488', 'D', 'OBS1', '20260831'], ['07488', 'D', 'OBS2', '20260901'], ['07488', 'D', 'OBS3', '20260902'],
+    ['07488', 'F', 'OBS4', '20260902'], ['07488', 'U', 'OBS5', '20260902'], ['07488', 'missing', 'OBS6', '20260902'],
+    ['07488', 'D', 'OBS7', '20261301'], ['07488', 'D', 'OBS8', '20260230'],
+  ])
+  await insertStandardRows(db, second, 'service', serviceHeader, [['07488', 'D', 'OTHER', '20260903']])
+  const observed = await checkObservations(db, 'observations.zip')
+  assert.deepEqual(observed.findings.map(({ id, checked, skipped, found }) => ({ id, checked, skipped, found })), [
+    { id: 'service-after-death', checked: 3, skipped: 5, found: 1 },
+    { id: 'thai-cid-mod11', checked: 3, skipped: 1, found: 2 },
+    { id: 'prename-sex', checked: 2, skipped: 2, found: 1 },
+    // The fixture carries no birth date and no OPD rows, so these run but find nothing eligible.
+    { id: 'birth-in-future', checked: 0, skipped: 4, found: 0 },
+    { id: 'service-before-birth', checked: 0, skipped: 8, found: 0 },
+    { id: 'death-before-birth', checked: 0, skipped: 4, found: 0 },
+    { id: 'diagnosis-without-service', checked: 0, skipped: 0, found: 0 },
+    { id: 'drug-without-service', checked: 0, skipped: 0, found: 0 },
+  ])
+  for (const finding of observed.findings) {
+    const detail = await observationRows(db, 'observations.zip', finding.id)
+    assert.equal(detail.total, finding.found)
+    assert.equal(detail.rows.length, finding.found)
+  }
+  const deathRows = await observationRows(db, 'observations.zip', 'service-after-death')
+  assert.equal(deathRows.rows[0][deathRows.columns.indexOf('seq')], 'OBS3')
+  await assert.rejects(() => observationRows(db, 'observations.zip', 'unknown'), /ไม่รู้จักเกณฑ์/)
+  assert.ok((await checkObservations(db, 'missing.zip')).findings.every((finding) => finding.checked === 0 && finding.found === 0))
+  console.log('PASS: observation rules, cross-import PERSON joins, date boundaries, MOD11, prefix mapping, skipped rows and zip scope')
+
+  // The observ_check register: seeded from the rules in code, and the only thing that decides
+  // which of them a check actually runs.
+  const register = await listObservationRules(db)
+  assert.deepEqual(register.map((rule) => rule.id), observed.findings.map((finding) => finding.id),
+    'every compiled rule is registered, in the order the check runs them')
+  assert.ok(register.every((rule) => rule.active), 'a newly registered rule is switched on')
+  assert.equal(register.find((rule) => rule.id === 'prename-sex')?.level, 'warning', 'the register carries the rule level')
+  assert.ok(register.some((rule) => rule.level === 'error'), 'both levels reach the register')
+
+  await setObservationRuleActive(db, 'prename-sex', false)
+  await db.query(`INSERT INTO observ_check (rule_id, table_name, detail) VALUES ('gone', 'person', 'กฎที่ถูกถอดออก')`)
+  await db.query(`DELETE FROM schema_init WHERE component = 'observations'`)
+  assert.equal((await syncObservationRules(db)).applied, true, 'the register is rebuilt when its digest is not recorded')
+  const reseeded = await listObservationRules(db)
+  assert.equal(reseeded.find((rule) => rule.id === 'gone'), undefined, 'a rule with no SQL left in code loses its row')
+  assert.equal(reseeded.find((rule) => rule.id === 'prename-sex')?.active, false, 're-seeding never overwrites the switch')
+  assert.deepEqual((await checkObservations(db, 'observations.zip')).findings.map((finding) => finding.id),
+    reseeded.filter((rule) => rule.active).map((rule) => rule.id), 'the check runs exactly the rules left switched on')
+  assert.equal((await syncObservationRules(db)).applied, false, 'an unchanged catalogue re-seeds nothing')
+  await setObservationRuleActive(db, 'prename-sex', true)
+  assert.equal((await listObservationRules(db)).find((rule) => rule.id === 'prename-sex')?.active, true,
+    'a rule can be switched back on')
+  console.log('PASS: observ_check register seeds from code, survives re-seeding and decides which rules run')
 } finally {
   if (db && !db.closed) await db.close()
   await rm(directory, { recursive: true, force: true })

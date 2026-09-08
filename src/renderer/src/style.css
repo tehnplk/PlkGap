@@ -153,10 +153,16 @@ svg { flex-shrink: 0; }
 .sort-indicator { font-size: 10px; opacity: 0.5; width: 12px; display: inline-block; text-align: center; }
 .active-sort .sort-indicator { opacity: 1; color: var(--accent); }
 .th-sort-button:hover { background: #ede2fa; }
+.column-resize-handle { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; z-index: 2; border-right: 1px solid #d8c8e8; }
+.column-resize-handle:hover, .column-resize-handle:focus-visible { background: #b996df66; outline: none; }
+.data-grid-resized th, .data-grid-resized td { overflow: hidden; text-overflow: ellipsis; }
+.data-grid-resized .column-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.data-grid-resized .sort-indicator { flex-shrink: 0; }
 .data-table tbody tr { border-bottom: 1px solid #f3eef9; }
 .data-table tbody tr:last-child { border-bottom: 0; }
 .data-table tbody tr:hover { background-color: #faf6fe; }
 .data-table td { padding: 7px 10px; vertical-align: middle; }
+.data-table td.field-description { min-width: 240px; max-width: 420px; white-space: normal; overflow-wrap: anywhere; }
 .data-table thead th.import-datetime, .data-table td.import-datetime { padding-left: 24px; white-space: nowrap; }
 .col-right { text-align: right; }
 .col-center { text-align: center; }

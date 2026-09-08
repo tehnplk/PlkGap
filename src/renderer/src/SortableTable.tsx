@@ -1,7 +1,7 @@
-import { Children, cloneElement, isValidElement, useState } from 'react'
-import type { ReactNode, ReactElement, TableHTMLAttributes } from 'react'
+import { Children, cloneElement, isValidElement, useLayoutEffect, useRef, useState } from 'react'
+import type { ReactNode, ReactElement, TableHTMLAttributes, PointerEvent } from 'react'
 
-type NodeProps = { children?: ReactNode; className?: string; 'data-sort-value'?: string | number; 'aria-sort'?: 'none' | 'ascending' | 'descending' }
+type NodeProps = { children?: ReactNode; className?: string; 'data-sort-value'?: string | number; 'aria-label'?: string; 'aria-sort'?: 'none' | 'ascending' | 'descending' }
 const elements = (children: ReactNode) => Children.toArray(children).filter(isValidElement<NodeProps>)
 function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -25,28 +25,99 @@ function valueOf(cell?: ReactElement<NodeProps>): string | number {
 }
 
 /** Sort React rows without changing page data or moving DOM nodes outside React. */
-export function SortableTable({ children, ...props }: TableHTMLAttributes<HTMLTableElement>) {
-  const [sort, setSort] = useState<{ column: number; descending: boolean } | null>(null)
-  return <table {...props}>{elements(children).map((section) => {
+type SortColumn = { column: number; descending: boolean }
+type SortableTableProps = TableHTMLAttributes<HTMLTableElement> & { defaultSort?: SortColumn[]; maxVisibleRows?: number }
+export function SortableTable({ children, defaultSort = [], maxVisibleRows, ...props }: SortableTableProps) {
+  const [sorting, setSorting] = useState<SortColumn[]>(defaultSort)
+  const tableRef = useRef<HTMLTableElement>(null)
+  const [columnWidths, setColumnWidths] = useState<number[] | null>(null)
+  const resizing = useRef<{ column: number; startX: number; widths: number[] } | null>(null)
+  const headerCount = elements(elements(children).find((section) => section.type === 'thead')?.props.children)
+    .flatMap((row) => elements(row.props.children)).length
+  const widths = columnWidths?.length === headerCount ? columnWidths : null
+  function measuredWidths() {
+    return Array.from(tableRef.current?.tHead?.rows[0]?.cells ?? []).map((cell) => cell.getBoundingClientRect().width)
+  }
+  function startResize(event: PointerEvent<HTMLSpanElement>, column: number) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const measured = measuredWidths()
+    resizing.current = { column, startX: event.clientX, widths: measured }
+    setColumnWidths(measured)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  function moveResize(event: PointerEvent<HTMLSpanElement>) {
+    const drag = resizing.current
+    if (!drag) return
+    const next = [...drag.widths]
+    next[drag.column] = Math.max(48, drag.widths[drag.column] + event.clientX - drag.startX)
+    setColumnWidths(next)
+  }
+  function endResize(event: PointerEvent<HTMLSpanElement>) {
+    resizing.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  const [maxHeight, setMaxHeight] = useState<number>()
+  useLayoutEffect(() => {
+    const table = tableRef.current
+    if (!table || !maxVisibleRows || maxVisibleRows < 1) return
+    const measure = () => {
+      const rows = table.tBodies[0]?.rows
+      const lastVisible = rows?.[maxVisibleRows - 1]
+      setMaxHeight(rows && rows.length > maxVisibleRows && lastVisible
+        ? Math.ceil(lastVisible.getBoundingClientRect().bottom - table.getBoundingClientRect().top) : undefined)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(table)
+    return () => observer.disconnect()
+  }, [children, sorting, maxVisibleRows])
+  const sort = sorting[0]
+  const table = <table {...props} ref={tableRef}
+    className={`${props.className ?? ''}${widths ? ' data-grid-resized' : ''}`}
+    style={{ ...props.style, ...(widths ? { tableLayout: 'fixed', width: widths.reduce((sum, width) => sum + width, 0) } : {}) }}>
+    {widths && <colgroup>{widths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>}
+    {elements(children).map((section) => {
     if (section.type === 'thead') return cloneElement(section, {}, elements(section.props.children).map((row) =>
       cloneElement(row, {}, elements(row.props.children).map((cell, column) => {
         const active = sort?.column === column
         const label = textOf(cell.props.children) || 'การทำงาน'
         return cloneElement(cell, {
           className: `${cell.props.className ?? ''}${active ? ' active-sort' : ''}`,
+          'aria-label': label,
           'aria-sort': active ? (sort.descending ? 'descending' : 'ascending') : 'none',
-        }, <button type="button" className="th-sort-button" onClick={() => setSort({ column, descending: active ? !sort.descending : false })}>
-          {label}<span className="sort-indicator" aria-hidden="true" style={{ fontSize: 0 }}>
+        }, <><button type="button" className="th-sort-button" onClick={() => setSorting([{ column, descending: active ? !sort.descending : false }])}>
+          <span className="column-label">{label}</span><span className="sort-indicator" aria-hidden="true" style={{ fontSize: 0 }}>
             <svg width="12" height="12" viewBox="0 0 12 12"><path d={active ? (sort.descending ? 'M2 4L6 8L10 4' : 'M2 8L6 4L10 8') : 'M3 4L6 1L9 4M3 8L6 11L9 8'} fill="none" stroke="currentColor" /></svg>
           </span>
-        </button>)
+        </button><span className="column-resize-handle" role="separator" aria-orientation="vertical"
+          aria-label={`ปรับความกว้าง ${label}`} tabIndex={0} aria-valuemin={48}
+          aria-valuenow={widths ? Math.round(widths[column]) : undefined}
+          onPointerDown={(event) => startResize(event, column)} onPointerMove={moveResize}
+          onPointerUp={endResize} onPointerCancel={endResize} onLostPointerCapture={() => { resizing.current = null }}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+            event.preventDefault()
+            event.stopPropagation()
+            const next = measuredWidths()
+            next[column] = Math.max(48, next[column] + (event.key === 'ArrowRight' ? 16 : -16))
+            setColumnWidths(next)
+          }} /></>)
       }))))
     if (section.type !== 'tbody' || !sort) return section
-    const rows = elements(section.props.children).map((row, index) => ({ row, index, value: valueOf(elements(row.props.children)[sort.column]) }))
+    const rows = elements(section.props.children).map((row, index) => ({ row, index, values: sorting.map(({ column }) => valueOf(elements(row.props.children)[column])) }))
     rows.sort((a, b) => {
-      const result = typeof a.value === 'number' && typeof b.value === 'number' ? a.value - b.value : collator.compare(String(a.value), String(b.value))
-      return (sort.descending ? -result : result) || a.index - b.index
+      for (let index = 0; index < sorting.length; index++) {
+        const left = a.values[index]
+        const right = b.values[index]
+        const result = typeof left === 'number' && typeof right === 'number' ? left - right : collator.compare(String(left), String(right))
+        if (result) return sorting[index].descending ? -result : result
+      }
+      return a.index - b.index
     })
     return cloneElement(section, {}, rows.map(({ row }) => row))
   })}</table>
+  return maxVisibleRows ? <div className="data-grid-scroll" style={{ maxHeight, overflow: 'auto' }}>{table}</div> : table
 }

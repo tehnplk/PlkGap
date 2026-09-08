@@ -71,6 +71,8 @@ export interface DataCountYear {
 export interface DataCountResult {
   table: string
   column: string
+  /** แฟ้มสะสม — counted by `d_update`, so only the fiscal-year totals mean anything. */
+  cumulative: boolean
   years: DataCountYear[]
 }
 
@@ -78,6 +80,7 @@ export interface DataCountResult {
 export interface StructureFinding {
   tableName: string
   columnName: string
+  fieldDescription: string
   rule: string
   detail: string
   /** Rows of this file that came from the zip. */
@@ -96,6 +99,34 @@ export interface FailingRows {
   rows: string[][]
   total: number
 }
+export type ObservationRuleId = 'service-after-death' | 'thai-cid-mod11' | 'prename-sex'
+  | 'birth-in-future' | 'service-before-birth' | 'death-before-birth'
+  | 'diagnosis-without-service' | 'drug-without-service'
+/** `error` when the rows cannot all be true at once, `warning` when a human should judge. */
+export type ObservationLevel = 'error' | 'warning'
+/** One row of the `observ_check` register: what a rule is called and whether it runs. */
+export interface ObservationRule {
+  id: ObservationRuleId
+  tableName: string
+  detail: string
+  level: ObservationLevel
+  active: boolean
+}
+export interface ObservationFinding {
+  id: ObservationRuleId
+  tableName: string
+  detail: string
+  level: ObservationLevel
+  checked: number
+  skipped: number
+  found: number
+}
+export interface ObservationResult {
+  zipName: string
+  checkedAt: string
+  findings: ObservationFinding[]
+}
+
 export interface StructureCheckResult {
   /** The zip whose rows were checked — every run that imported this file name. */
   zipName: string
@@ -141,6 +172,12 @@ export interface AppApi {
   countByFiscalYears: (table: string, years: number[]) => Promise<DataCountResult>
   /** Checks the rows imported from one zip against the 43-file data dictionary, and stores it. */
   checkStructure: (zipName: string) => Promise<StructureCheckResult>
+  checkObservations: (zipName: string) => Promise<ObservationResult>
+  observationRows: (zipName: string, rule: ObservationRuleId) => Promise<FailingRows>
+  /** The `observ_check` register — every rule the app knows, in the order it runs them. */
+  listObservationRules: () => Promise<ObservationRule[]>
+  /** Switches one registered rule on or off for the next check. */
+  setObservationRuleActive: (rule: ObservationRuleId, active: boolean) => Promise<void>
   /** The stored result of the last structure check of a zip, if there is one. */
   structureResult: (zipName: string) => Promise<StructureCheckResult | null>
   /** The actual rows behind one finding, capped to a readable sample. */

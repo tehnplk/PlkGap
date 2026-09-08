@@ -13,6 +13,7 @@ export function StructureCheckPage() {
   const [structure, setStructure] = useState<StructureCheckResult | null>(null)
   const [checkingZip, setCheckingZip] = useState('')
   const [level, setLevel] = useState<'all' | 'error' | 'warning'>('all')
+  const [file, setFile] = useState('all')
   const [failing, setFailing] = useState<FailingRows | null>(null)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [error, setError] = useState('')
@@ -57,6 +58,7 @@ export function StructureCheckPage() {
     setStructure(null)
     setFailing(null)
     setLevel('all')
+    setFile('all')
     setError('')
     try {
       setStructure(await window.api.checkStructure(zipName))
@@ -77,7 +79,10 @@ export function StructureCheckPage() {
     }
   }
 
-  const findings = structure?.findings.filter((finding) => level === 'all' || finding.level === level) ?? []
+  const issueFiles = [...new Set(structure?.findings.map((finding) => finding.tableName) ?? [])]
+    .sort((a, b) => a.localeCompare(b, 'th', { numeric: true, sensitivity: 'base' }))
+  const findings = structure?.findings.filter((finding) =>
+    (level === 'all' || finding.level === level) && (file === 'all' || finding.tableName === file)) ?? []
   const errors = structure?.findings.filter((finding) => finding.level === 'error').length ?? 0
   const warnings = structure?.findings.filter((finding) => finding.level === 'warning').length ?? 0
 
@@ -95,7 +100,7 @@ export function StructureCheckPage() {
 
     <p className="section-title">ไฟล์ที่นำเข้าแล้ว</p>
     <div className="table-wrapper">
-      <SortableTable className="data-table" aria-label="ไฟล์สำหรับตรวจตามโครงสร้าง">
+      <SortableTable className="data-table" aria-label="ไฟล์สำหรับตรวจตามโครงสร้าง" maxVisibleRows={5}>
         <thead><tr><th className="col-right">ลำดับ</th><th className="import-datetime">วัน-เวลานำเข้า</th><th>ชื่อไฟล์</th><th className="col-right">File Size (MB)</th><th className="col-right">แถว</th><th className="col-center">ตรวจสอบ</th></tr></thead>
         <tbody>
           {log.map((row, index) => <tr key={row.id}>
@@ -136,13 +141,23 @@ export function StructureCheckPage() {
         <div className="stat-card"><small>ควรแก้ไข</small><strong>{warnings}</strong></div>
       </div>
 
+      {!!issueFiles.length && <div className="toolbar-row">
+        <label htmlFor="structure-file">กรองแฟ้ม</label>
+        <select id="structure-file" className="mock-select" value={file} onChange={(event) => setFile(event.target.value)}>
+          <option value="all">ทั้งหมด</option>
+          {issueFiles.map((name) => <option key={name} value={name}>{name.toUpperCase()}</option>)}
+        </select>
+      </div>}
+
       {!!structure.findings.length && <div className="table-wrapper">
-        <SortableTable className="data-table" aria-label="ผลตรวจตามโครงสร้าง">
-          <thead><tr><th>แฟ้ม</th><th>ฟิลด์</th><th>เกณฑ์</th><th className="col-right">จำนวนแถว</th><th className="col-right">ไม่ผ่าน</th><th className="col-right">ร้อยละ</th><th className="col-center">ระดับ</th><th className="col-center"></th></tr></thead>
+        <SortableTable className="data-table" aria-label="ผลตรวจตามโครงสร้าง"
+          defaultSort={[{ column: 0, descending: false }, { column: 1, descending: false }]}>
+          <thead><tr><th>แฟ้ม</th><th>ฟิลด์</th><th>รายละเอียด</th><th>เกณฑ์</th><th className="col-right">จำนวนแถว</th><th className="col-right">ไม่ผ่าน</th><th className="col-right">ร้อยละ</th><th className="col-center">ระดับ</th><th className="col-center"></th></tr></thead>
           <tbody>
             {findings.map((finding) => <tr key={`${finding.tableName}-${finding.columnName}-${finding.rule}`}>
               <td className="code-cell"><code>{finding.tableName.toUpperCase()}</code></td>
               <td className="name-cell"><strong>{finding.columnName.toUpperCase()}</strong></td>
+              <td className="field-description">{finding.fieldDescription || '-'}</td>
               <td>{finding.detail}</td>
               <td className="col-right num-cell">{finding.tableRows.toLocaleString('en-US')}</td>
               <td className="col-right num-cell">{finding.found.toLocaleString('en-US')}</td>
@@ -154,7 +169,7 @@ export function StructureCheckPage() {
         </SortableTable>
       </div>}
       {!structure.findings.length && <p className="hint-text">ข้อมูลผ่านทุกเกณฑ์ตามโครงสร้าง</p>}
-      {!!structure.findings.length && !findings.length && <p className="hint-text">ไม่พบรายการในระดับที่เลือก</p>}
+      {!!structure.findings.length && !findings.length && <p className="hint-text">ไม่พบรายการตามตัวกรองที่เลือก</p>}
     </>}
 
     <dialog className="large-modal" ref={failingDialog} onClose={() => setFailing(null)}

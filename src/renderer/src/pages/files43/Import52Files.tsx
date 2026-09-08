@@ -110,7 +110,7 @@ export function Import52Files() {
     <p className="section-title">ประวัติการนำเข้า</p>
 
     <div className="table-wrapper">
-      <SortableTable className="data-table" aria-label="ประวัติการนำเข้า">
+      <SortableTable className="data-table" aria-label="ประวัติการนำเข้า" maxVisibleRows={15}>
         <thead>
           <tr>
             <th className="col-right">ลำดับ</th>

@@ -20,7 +20,13 @@ function writeZip(path, entries) {
     const zip = new yazl.ZipFile()
     // One data row per file, with a hospcode too long for the dictionary's 5 characters.
     const content = ['HOSPCODE', 'GA0014056'].join('\n')
-    for (const name of entries) zip.addBuffer(Buffer.from(content), name)
+    for (const name of entries) {
+      const value = /(^|\/)person\.txt$/i.test(name)
+        ? 'HOSPCODE|PID|CID|NATION|PRENAME|SEX|DISCHARGE|DDISCHARGE\nGA0014056|TEST1|123|099|003|2|1|20260901'
+        : /(^|\/)service\.txt$/i.test(name)
+          ? 'HOSPCODE|PID|SEQ|DATE_SERV\nGA0014056|TEST1|1|20260902' : content
+      zip.addBuffer(Buffer.from(value), name)
+    }
     zip.outputStream.pipe(createWriteStream(path)).on('close', resolve).on('error', reject)
     zip.end()
   })
@@ -76,12 +82,12 @@ try {
   await expect(navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true })).toBeHidden()
   await settings.click()
   await expect(navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true })).toBeVisible()
-  await expect(navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true })).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'คุณภาพตามโครงสร้าง', exact: true })).toBeVisible()
   await files43.click()
   await expect(files43).toHaveAttribute('aria-expanded', 'false')
-  await expect(navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true })).toBeHidden()
+  await expect(navigation.getByRole('button', { name: 'คุณภาพตามโครงสร้าง', exact: true })).toBeHidden()
   await files43.click()
-  await expect(navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true })).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'คุณภาพตามโครงสร้าง', exact: true })).toBeVisible()
   await page.screenshot({ path: 'artifacts/plkgap-sidebar-groups.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
@@ -159,20 +165,49 @@ try {
   await expect(dataCount.getByLabel('เลือกแฟ้ม')).toHaveValue('service')
   await expect(dataCount.locator('tbody tr')).toHaveCount(5)
   await expect(dataCount).toContainText('date_serv')
-  await dataCount.getByLabel('เลือกแฟ้ม').selectOption('person')
   assert.deepEqual(await dataCount.locator('thead th').allInnerTexts(),
     ['ปีงบ', 'ต.ค.', 'พ.ย.', 'ธ.ค.', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'รวม'])
+  // แฟ้มสะสม is counted by d_update, so it reports fiscal-year totals with no month columns.
+  await dataCount.getByLabel('เลือกแฟ้ม').selectOption('person')
+  await expect(dataCount).toContainText('d_update')
+  assert.deepEqual(await dataCount.locator('thead th').allInnerTexts(), ['ปีงบ', 'รวม'])
+  await expect(dataCount.locator('tbody tr')).toHaveCount(5)
+  await expect(dataCount.locator('tbody tr').first().locator('td')).toHaveCount(2)
+  await dataCount.getByLabel('เลือกแฟ้ม').selectOption('service')
+  await expect(dataCount).toContainText('date_serv')
   await expect(dataCount.locator('tbody tr')).toHaveCount(5)
   const fiscalYears = await dataCount.locator('tbody tr td:first-child').allInnerTexts()
   assert.deepEqual(fiscalYears.map(Number), [0, 1, 2, 3, 4].map((back) => Number(fiscalYears[0]) - back),
     'five fiscal years counting back from the current one')
-  await expect(dataCount).toContainText('d_update')
   await dataCount.getByRole('button', { name: 'ปีงบ', exact: true }).click()
   assert.deepEqual((await dataCount.locator('tbody tr td:first-child').allInnerTexts()).map(Number), fiscalYears.map(Number).reverse())
   await expect(dataCount.getByRole('columnheader', { name: 'ปีงบ' })).toHaveAttribute('aria-sort', 'ascending')
   await dataCount.getByRole('button', { name: 'ปีงบ', exact: true }).click()
   assert.deepEqual(await dataCount.locator('tbody tr td:first-child').allInnerTexts(), fiscalYears)
   await expect(dataCount.locator('thead th button')).toHaveCount(14)
+  const yearHeader = dataCount.getByRole('columnheader', { name: 'ปีงบ', exact: true })
+  const yearWidth = (await yearHeader.boundingBox()).width
+  const yearEdge = dataCount.getByRole('separator', { name: 'ปรับความกว้าง ปีงบ', exact: true })
+  await expect(dataCount.getByRole('separator')).toHaveCount(14)
+  async function resizeColumn(handle, distance) {
+    const box = await handle.boundingBox()
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2 + distance, box.y + box.height / 2, { steps: 8 })
+    await page.mouse.up()
+  }
+  await resizeColumn(yearEdge, 80)
+  await expect.poll(async () => (await yearHeader.boundingBox()).width).toBeGreaterThan(yearWidth + 70)
+  await expect(yearHeader).toHaveAttribute('aria-sort', 'descending')
+  await resizeColumn(yearEdge, -60)
+  await expect.poll(async () => (await yearHeader.boundingBox()).width).toBeLessThan(yearWidth + 30)
+  assert.ok(Math.abs((await yearHeader.boundingBox()).width - (await dataCount.locator('tbody tr td').first().boundingBox()).width) < 2)
+  await dataCount.getByRole('button', { name: 'ปีงบ', exact: true }).click()
+  await expect(yearHeader).toHaveAttribute('aria-sort', 'ascending')
+  await yearEdge.focus()
+  const keyboardWidth = (await yearHeader.boundingBox()).width
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(async () => (await yearHeader.boundingBox()).width).toBeGreaterThan(keyboardWidth + 10)
   await page.screenshot({ path: 'artifacts/plkgap-data-count.png', fullPage: true })
   await dataCount.getByRole('button', { name: 'Close ปริมาณข้อมูล - DataCount' }).click()
   await expect(dataCount).toHaveCount(0)
@@ -264,8 +299,8 @@ try {
   await expect(map.locator('path.leaflet-interactive')).toHaveCount(boundaries.districts.length, { timeout: 30000 })
   await page.screenshot({ path: 'artifacts/plkgap-map.png', fullPage: true })
 
-  await navigation.getByRole('button', { name: 'ตรวจตามโครงสร้าง', exact: true }).click()
-  const structure = page.getByRole('region', { name: 'ตรวจตามโครงสร้าง - StructureCheckPage window' })
+  await navigation.getByRole('button', { name: 'คุณภาพตามโครงสร้าง', exact: true }).click()
+  const structure = page.getByRole('region', { name: 'คุณภาพตามโครงสร้าง - StructureCheckPage window' })
   await expect(structure).toBeVisible()
   const structureRuns = structure.locator('table[aria-label="ไฟล์สำหรับตรวจตามโครงสร้าง"] tbody tr')
   await expect(structureRuns).toHaveCount(1)
@@ -279,15 +314,29 @@ try {
   const findings = findingTable.locator('tbody tr')
   await expect(findingTable).toContainText('ความยาวเกิน 5 อักขระ')
   await expect(findingTable).toContainText('ห้ามเป็นค่าว่าง')
+  const findingNames = await findings.evaluateAll((rows) => rows.map((row) => [row.cells[0].textContent, row.cells[1].textContent]))
+  const nameOrder = new Intl.Collator('th', { numeric: true, sensitivity: 'base' })
+  assert.deepEqual(findingNames, [...findingNames].sort((a, b) => nameOrder.compare(a[0], b[0]) || nameOrder.compare(a[1], b[1])))
+  const issueFileNames = [...new Set(findingNames.map(([name]) => name))].sort(nameOrder.compare)
+  const fileFilter = structure.getByLabel('กรองแฟ้ม', { exact: true })
+  assert.deepEqual(await fileFilter.locator('option').allTextContents(), ['ทั้งหมด', ...issueFileNames])
+  assert.ok((await fileFilter.boundingBox()).y >= (await structure.locator('.stat-grid').boundingBox()).y + (await structure.locator('.stat-grid').boundingBox()).height)
+  await fileFilter.selectOption(issueFileNames[0].toLowerCase())
+  await expect(findings).toHaveCount(findingNames.filter(([name]) => name === issueFileNames[0]).length)
+  assert.ok((await findings.locator('td:first-child').allTextContents()).every((name) => name === issueFileNames[0]))
+  await fileFilter.selectOption('all')
   assert.deepEqual(await findingTable.locator('thead th').allInnerTexts(),
-    ['แฟ้ม', 'ฟิลด์', 'เกณฑ์', 'จำนวนแถว', 'ไม่ผ่าน', 'ร้อยละ', 'ระดับ', 'การทำงาน'])
+    ['แฟ้ม', 'ฟิลด์', 'รายละเอียด', 'เกณฑ์', 'จำนวนแถว', 'ไม่ผ่าน', 'ร้อยละ', 'ระดับ', 'การทำงาน'])
+  const fieldDefinition = reference.tables.find((table) => table.name === 'c_files_schema').rows
+    .find((row) => row.table_name === findingNames[0][0] && row.name === findingNames[0][1])
+  await expect(findings.first().locator('td').nth(2)).toHaveText(fieldDefinition.description || fieldDefinition.caption)
   await expect(findings.first()).toContainText('100.00')
   const firstCount = await findings.count()
   assert.ok(firstCount > 0, 'the structure check reports what it found')
   await structure.getByLabel('กรองระดับ').selectOption('error')
   await expect(findings).toHaveCount(firstCount)
   await structure.getByLabel('กรองระดับ').selectOption('warning')
-  await expect(structure).toContainText('ไม่พบรายการในระดับที่เลือก')
+  await expect(structure).toContainText('ไม่พบรายการตามตัวกรองที่เลือก')
   await structure.getByLabel('กรองระดับ').selectOption('all')
   await expect(findings).toHaveCount(firstCount)
   await findings.first().getByRole('button', { name: 'ดูแถวที่ไม่ผ่าน' }).click()
@@ -310,9 +359,45 @@ try {
   assert.ok(afterDrag.x > beforeDrag.x + 50 && afterDrag.y > beforeDrag.y + 20, 'The modal moves with its header')
   await modal.getByRole('button', { name: 'ปิด', exact: true }).click()
   await expect(modal).toBeHidden()
+  await fileFilter.selectOption(issueFileNames[0].toLowerCase())
   await structureRuns.first().getByRole('button', { name: 'ตรวจตามโครงสร้าง' }).click()
   await expect(findings).toHaveCount(firstCount, { timeout: 60000 })
+  await expect(fileFilter).toHaveValue('all')
   await page.screenshot({ path: 'artifacts/plkgap-structure-check.png', fullPage: true })
+
+  await navigation.getByRole('button', { name: 'คุณภาพตามข้อสังเกต', exact: true }).click()
+  const observations = page.getByRole('region', { name: 'คุณภาพตามข้อสังเกต - ObservationCheckPage window' })
+  await observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
+  const observationTable = observations.getByRole('table', { name: 'ผลตรวจตามข้อสังเกต', exact: true })
+  // The register drives the result list, so both tables carry one row per rule switched on.
+  const register = observations.getByRole('table', { name: 'ทะเบียนข้อสังเกต', exact: true })
+  const registered = await register.locator('tbody tr').count()
+  assert.ok(registered > 0, 'the observ_check register is seeded')
+  await expect(observationTable.locator('tbody tr')).toHaveCount(registered)
+  await expect(observationTable).not.toContainText('NCDSCREEN')
+  // The fixture only fills PERSON and SERVICE, so exactly the three rules reading them trip.
+  const observationEntries = observationTable.locator('tbody tr')
+    .filter({ has: page.locator('.status-pill.status-error, .status-pill.status-warning') })
+  await expect(observationEntries).toHaveCount(3)
+  for (let index = 0; index < 3; index++) {
+    await expect(observationEntries.nth(index).locator('td').nth(4)).toHaveText('1')
+    await observationEntries.nth(index).getByRole('button', { name: 'ดูแถวที่พบ' }).click()
+    const observationDialog = observations.getByRole('dialog', { name: 'รายละเอียดข้อสังเกต' })
+    await expect(observationDialog).toBeVisible()
+    await expect(observationDialog.locator('tbody tr')).toHaveCount(1)
+    await observationDialog.getByRole('button', { name: 'ปิด', exact: true }).click()
+    await expect(observationDialog).toBeHidden()
+  }
+  // Switching a rule off in the register takes it out of the next check, and back on restores it.
+  const prenameRule = register.locator('tbody tr').filter({ hasText: 'prename-sex' })
+  await prenameRule.getByRole('checkbox').uncheck()
+  await observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
+  await expect(observationTable.locator('tbody tr')).toHaveCount(registered - 1)
+  await expect(observationTable).not.toContainText('คำนำหน้าชื่อไม่สอดคล้องกับเพศ')
+  await prenameRule.getByRole('checkbox').check()
+  await observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
+  await expect(observationTable.locator('tbody tr')).toHaveCount(registered)
+  await page.screenshot({ path: 'artifacts/plkgap-observation-check.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true }).click()
   const serviceUnit = page.getByRole('region', { name: 'ตั้งค่าหน่วยบริการ - ServiceUnitPage window' })
@@ -327,6 +412,33 @@ try {
   await serviceUnit.getByRole('button', { name: 'ค้นหา' }).click()
   await expect(serviceUnit.getByRole('status')).toContainText('ไม่พบหน่วยบริการรหัส 99999')
   await page.screenshot({ path: 'artifacts/plkgap-settings.png', fullPage: true })
+
+  // Quality pages show five rows; the import page shows fifteen before scrolling.
+  for (let index = 0; index < 4; index++) await page.evaluate((path) => window.api.runImport(path), validZip)
+  let importedCount = 5
+  for (const count of [5, 6, 15, 16]) {
+    while (importedCount < count) {
+      await page.evaluate((path) => window.api.runImport(path), validZip)
+      importedCount++
+    }
+    for (const [title, source] of [['นำเข้าข้อมูล', 'Import52Files'], ['คุณภาพตามโครงสร้าง', 'StructureCheckPage'], ['คุณภาพตามข้อสังเกต', 'ObservationCheckPage']]) {
+      const region = page.getByRole('region', { name: `${title} - ${source} window` })
+      await navigation.getByRole('button', { name: title, exact: true }).click()
+      await region.getByRole('button', { name: `Close ${title} - ${source}`, exact: true }).click()
+      await navigation.getByRole('button', { name: title, exact: true }).click()
+      const viewport = region.locator('.data-grid-scroll')
+      await expect(viewport.locator('tbody tr')).toHaveCount(count)
+      const visibleRows = source === 'Import52Files' ? 15 : 5
+      await expect.poll(() => viewport.evaluate((element) => element.scrollHeight > element.clientHeight + 1)).toBe(count > visibleRows)
+      if (count > visibleRows) {
+        const headerTop = await viewport.locator('thead th').first().evaluate((element) => element.getBoundingClientRect().top)
+        await viewport.evaluate((element) => { element.scrollTop = element.scrollHeight })
+        await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+        assert.ok(Math.abs(await viewport.locator('thead th').first().evaluate((element) => element.getBoundingClientRect().top) - headerTop) < 2)
+      }
+    }
+  }
+  await page.screenshot({ path: 'artifacts/plkgap-import-scroll.png', fullPage: true })
 
   await page.getByRole('menuitem', { name: 'เกี่ยวกับ', exact: true }).click()
   await page.getByRole('menuitem', { name: 'ผู้พัฒนา', exact: true }).click()

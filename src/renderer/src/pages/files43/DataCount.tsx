@@ -68,14 +68,14 @@ export function DataCount() {
           <thead>
             <tr>
               <th className="col-right">ปีงบ</th>
-              {MONTHS.map((month) => <th key={month} className="col-right">{month}</th>)}
+              {!count.cumulative && MONTHS.map((month) => <th key={month} className="col-right">{month}</th>)}
               <th className="col-right">รวม</th>
             </tr>
           </thead>
           <tbody>
             {count.years.map((year) => <tr key={year.fiscalYear}>
               <td className="col-right num-cell"><strong>{year.fiscalYear}</strong></td>
-              {year.months.map((value, index) => <td key={MONTHS[index]} className="col-right num-cell" data-sort-value={value}>
+              {!count.cumulative && year.months.map((value, index) => <td key={MONTHS[index]} className="col-right num-cell" data-sort-value={value}>
                 {value ? value.toLocaleString('en-US') : '-'}
               </td>)}
               <td className="col-right num-cell"><strong>{year.total.toLocaleString('en-US')}</strong></td>

@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
 import { postgis } from '@electric-sql/pglite-postgis'
+import type { ObservationLevel, ObservationRule, ObservationRuleId, ObservationFinding, ObservationResult } from '../shared/api'
 import type { BoundaryCollection, BoundaryLevel, DataCountResult, DatabaseStatus, FailingRows, Hospital, Household, ImportLogEntry, StructureCheckResult, StructureFinding } from '../shared/api'
 import referenceData from './reference/c-tables.json'
 import fileStructure from './reference/f43-tables.json'
@@ -165,8 +167,9 @@ export async function initializeSchema(db: PGlite, data: {
   const reference = await loadReferenceTables(db, data.reference)
   const geography = await loadGeographyTables(db)
   const app = await createAppTables(db)
+  const observations = await syncObservationRules(db)
   const files = await createFileTables(db, data.structure)
-  return { reference, geography, files, app,
+  return { reference, geography, files, app, observations,
     firstRun: reference.applied || geography.applied || files.applied || app.applied }
 }
 
@@ -258,7 +261,7 @@ export async function loadGeographyTables(db: PGlite, data: GeographyData = geog
 }
 
 /** Bump when a table below changes shape, so the new DDL runs once on the next start. */
-const APP_SCHEMA_VERSION = 'app@4'
+const APP_SCHEMA_VERSION = 'app@5'
 
 /**
  * Tables PlkGap owns itself, as opposed to the ones mirrored from SUB-HDC.
@@ -299,9 +302,21 @@ export async function createAppTables(db: PGlite) {
     row_count integer NOT NULL DEFAULT 0,
     rule_count integer NOT NULL DEFAULT 0
   );
-  CREATE INDEX idx_structure_check_log_zip ON structure_check_log (zip_name, table_name);`)
-  await recordInit(db, 'app', APP_SCHEMA_VERSION, 2, 0)
-  return { version: APP_SCHEMA_VERSION, table_count: 2, row_count: 0, applied: true }
+  CREATE INDEX idx_structure_check_log_zip ON structure_check_log (zip_name, table_name);
+
+  -- The register of observation rules. Rows are seeded from observationRules() by
+  -- syncObservationRules(); the SQL of a rule stays in code, only its wording, order and the
+  -- on/off switch live here, so is_active is the one column the seeding never overwrites.
+  CREATE TABLE IF NOT EXISTS observ_check (
+    rule_id text PRIMARY KEY,
+    table_name text NOT NULL,
+    detail text NOT NULL,
+    level text NOT NULL DEFAULT 'error',
+    sort_order integer NOT NULL DEFAULT 0,
+    is_active boolean NOT NULL DEFAULT true
+  );`)
+  await recordInit(db, 'app', APP_SCHEMA_VERSION, 3, 0)
+  return { version: APP_SCHEMA_VERSION, table_count: 3, row_count: 0, applied: true }
 }
 
 /** One row per import run, newest first. The history is append-only: nothing here deletes it. */
@@ -315,7 +330,7 @@ export async function listImportLog(db: PGlite, limit = 200): Promise<ImportLogE
   return rows
 }
 
-interface DictionaryColumn { table: string; column: string; type: string; width: number; required: boolean }
+interface DictionaryColumn { table: string; column: string; type: string; width: number; required: boolean; fieldDescription: string }
 interface RuleTest { column: string; rule: string; detail: string; level: string; test: string }
 
 /** Every rule the dictionary puts on one column, as SQL that is true when a row breaks it. */
@@ -352,6 +367,7 @@ export async function checkImportStructure(db: PGlite, zipName: string,
   structure: FileStructure = fileStructure as FileStructure): Promise<StructureCheckResult> {
   const dictionary = await db.query<DictionaryColumn>(`
     SELECT LOWER(table_name) AS table, LOWER(name) AS column, type,
+      COALESCE(NULLIF(description, ''), caption, '') AS "fieldDescription",
       -- width is usually plain digits, but the dictionary has the odd '13.00'
       CASE WHEN width ~ '^[0-9]+' THEN SPLIT_PART(width, '.', 1)::int ELSE 0 END AS width,
       not_null = 'Y' AS required
@@ -382,7 +398,9 @@ export async function checkImportStructure(db: PGlite, zipName: string,
     rules += checks.length
     checks.forEach((check, index) => {
       const found = summary[`c${index}`] ?? 0
-      if (found > 0) findings.push({ tableName: table.name, columnName: check.column, rule: check.rule, detail: check.detail, tableRows: summary.total, found, level: check.level })
+      if (found > 0) findings.push({ tableName: table.name, columnName: check.column,
+        fieldDescription: columns.find((entry) => entry.column === check.column)?.fieldDescription ?? '',
+        rule: check.rule, detail: check.detail, tableRows: summary.total, found, level: check.level })
     })
   }
 
@@ -443,15 +461,189 @@ export async function structureFailingRows(db: PGlite, zipName: string, tableNam
   }
 }
 
+/** Validate YYYYMMDD without allowing malformed imported values to throw on a date cast. */
+function validObservationDate(value: string) {
+  const year = `substring(${value}, 1, 4)::int`
+  const month = `substring(${value}, 5, 2)::int`
+  const day = `substring(${value}, 7, 2)::int`
+  return `CASE WHEN ${value} ~ '^[0-9]{8}$' THEN
+    CASE WHEN ${year} BETWEEN 1 AND 9999 AND ${month} BETWEEN 1 AND 12 AND ${day} BETWEEN 1 AND 31
+      THEN to_char(make_date(${year}, ${month}, 1) + (${day} - 1), 'YYYYMMDD') = ${value}
+      ELSE false END ELSE false END`
+}
+
+/**
+ * Every observation rule the app can run. `level` is `error` when the rows cannot be true at once
+ * and `warning` when they merely look wrong and a human should judge.
+ * The register table `observ_check` is seeded from this list — see syncObservationRules().
+ */
+function observationRules(): {
+  id: ObservationRuleId; tableName: string; detail: string
+  level: ObservationLevel; columns: string[]; sql: string
+}[] {
+  return [
+    {
+      id: 'service-after-death', tableName: 'service', level: 'error',
+      detail: 'วันที่รับบริการหลังวันที่เสียชีวิตใน PERSON',
+      columns: ['hospcode', 'pid', 'seq', 'date_serv', 'discharge', 'ddischarge'],
+      sql: `SELECT s.hospcode, s.pid, s.seq, s.date_serv, p.discharge, p.ddischarge,
+        (p.discharge = '1' AND ${validObservationDate('p.ddischarge')} AND ${validObservationDate('s.date_serv')}) AS eligible,
+        (s.date_serv > p.ddischarge) AS failed
+        FROM service s LEFT JOIN person p ON p.hospcode = s.hospcode AND p.pid = s.pid
+        WHERE s.${importedFromZip}`,
+    },
+    {
+      id: 'thai-cid-mod11', tableName: 'person', level: 'error',
+      detail: 'เลขบัตรประชาชนคนไทยไม่ผ่าน MOD11 (ต้องเป็นตัวเลข 13 หลัก)',
+      columns: ['hospcode', 'pid', 'cid', 'nation'],
+      sql: `SELECT p.hospcode, p.pid, p.cid, p.nation, (p.nation = '099') AS eligible,
+        CASE WHEN p.cid ~ '^[0-9]{13}$' THEN
+          ((11 - (SELECT SUM(substring(p.cid, n, 1)::int * (14 - n)) FROM generate_series(1, 12) n) % 11) % 10)
+            <> substring(p.cid, 13, 1)::int ELSE true END AS failed
+        FROM person p WHERE p.${importedFromZip}`,
+    },
+    {
+      id: 'prename-sex', tableName: 'person', level: 'warning',
+      detail: 'คำนำหน้าชื่อไม่สอดคล้องกับเพศ',
+      columns: ['hospcode', 'pid', 'prename', 'prename_full', 'sex', 'expected_sex'],
+      sql: `SELECT p.hospcode, p.pid, p.prename, r.prename_full, p.sex, r.sex AS expected_sex,
+        (p.sex IN ('1', '2') AND r.sex IN ('1', '2')) AS eligible,
+        (p.sex <> r.sex) AS failed
+        FROM person p LEFT JOIN c_person_prename r ON r.code = p.prename AND r.is_active = 1
+        WHERE p.${importedFromZip}`,
+    },
+    {
+      id: 'birth-in-future', tableName: 'person', level: 'error',
+      detail: 'วันเกิดใน PERSON อยู่ในอนาคต',
+      columns: ['hospcode', 'pid', 'birth', 'check_date'],
+      sql: `SELECT p.hospcode, p.pid, p.birth,
+        to_char(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok', 'YYYYMMDD') AS check_date,
+        ${validObservationDate('p.birth')} AS eligible,
+        (p.birth > to_char(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok', 'YYYYMMDD')) AS failed
+        FROM person p WHERE p.${importedFromZip}`,
+    },
+    {
+      id: 'service-before-birth', tableName: 'service', level: 'error',
+      detail: 'วันที่รับบริการก่อนวันเกิดใน PERSON',
+      columns: ['hospcode', 'pid', 'seq', 'date_serv', 'birth'],
+      sql: `SELECT s.hospcode, s.pid, s.seq, s.date_serv, p.birth,
+        (${validObservationDate('p.birth')} AND ${validObservationDate('s.date_serv')}) AS eligible,
+        (s.date_serv < p.birth) AS failed
+        FROM service s LEFT JOIN person p ON p.hospcode = s.hospcode AND p.pid = s.pid
+        WHERE s.${importedFromZip}`,
+    },
+    {
+      id: 'death-before-birth', tableName: 'person', level: 'error',
+      detail: 'วันที่เสียชีวิตก่อนวันเกิดใน PERSON',
+      columns: ['hospcode', 'pid', 'birth', 'discharge', 'ddischarge'],
+      sql: `SELECT p.hospcode, p.pid, p.birth, p.discharge, p.ddischarge,
+        (p.discharge = '1' AND ${validObservationDate('p.birth')} AND ${validObservationDate('p.ddischarge')}) AS eligible,
+        (p.ddischarge < p.birth) AS failed
+        FROM person p WHERE p.${importedFromZip}`,
+    },
+    ...(['diagnosis_opd', 'drug_opd'] as const).map((tableName) => ({
+      id: (tableName === 'diagnosis_opd' ? 'diagnosis-without-service' : 'drug-without-service') as ObservationRuleId,
+      tableName,
+      level: 'error' as ObservationLevel,
+      detail: `${tableName.toUpperCase()} ไม่มี SERVICE ที่ตรงกัน (HOSPCODE, PID, SEQ, DATE_SERV)`,
+      columns: ['hospcode', 'pid', 'seq', 'date_serv', tableName === 'diagnosis_opd' ? 'diagcode' : 'didstd'],
+      sql: `SELECT r.hospcode, r.pid, r.seq, r.date_serv, r.${tableName === 'diagnosis_opd' ? 'diagcode' : 'didstd'},
+        (btrim(r.hospcode) <> '' AND btrim(r.pid) <> '' AND btrim(r.seq) <> '' AND ${validObservationDate('r.date_serv')}) AS eligible,
+        NOT EXISTS (SELECT 1 FROM service s WHERE s.hospcode = r.hospcode AND s.pid = r.pid
+          AND s.seq = r.seq AND s.date_serv = r.date_serv) AS failed
+        FROM ${tableName} r WHERE r.${importedFromZip}`,
+    })),
+  ]
+}
+
+/**
+ * Brings the `observ_check` register in line with the rules compiled into the app: new rules are
+ * added, changed wording and order are refreshed, and a rule dropped from the code loses its row
+ * because there is no SQL left to run for it. A rule the user switched off stays off.
+ * Keyed on a digest of the catalogue, so a start that changes nothing writes nothing.
+ */
+export async function syncObservationRules(db: PGlite) {
+  await createAppTables(db)
+  const rules = observationRules()
+  const version = 'observ@' + createHash('sha1')
+    .update(JSON.stringify(rules.map((rule) => [rule.id, rule.tableName, rule.detail, rule.level])))
+    .digest('hex').slice(0, 12)
+  const done = await initializedVersion(db, 'observations')
+  if (done?.version === version) return { ...done, applied: false }
+
+  for (const [order, rule] of rules.entries()) {
+    await db.query(`INSERT INTO observ_check (rule_id, table_name, detail, level, sort_order)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (rule_id) DO UPDATE SET table_name = EXCLUDED.table_name,
+        detail = EXCLUDED.detail, level = EXCLUDED.level, sort_order = EXCLUDED.sort_order`,
+      [rule.id, rule.tableName, rule.detail, rule.level, order])
+  }
+  await db.query(`DELETE FROM observ_check WHERE rule_id NOT IN
+    (${rules.map((_rule, index) => `$${index + 1}`).join(', ')})`, rules.map((rule) => rule.id))
+  await recordInit(db, 'observations', version, 1, rules.length)
+  return { version, table_count: 1, row_count: rules.length, applied: true }
+}
+
+/** The register as it stands, newest wording and switches included. */
+export async function listObservationRules(db: PGlite): Promise<ObservationRule[]> {
+  const { rows } = await db.query<ObservationRule>(`
+    SELECT rule_id AS id, table_name AS "tableName", detail, level, is_active AS active
+    FROM observ_check ORDER BY sort_order, rule_id`)
+  return rows
+}
+
+/** Turns one registered rule on or off; the check run afterwards skips the ones that are off. */
+export async function setObservationRuleActive(db: PGlite, ruleId: string, active: boolean) {
+  await db.query('UPDATE observ_check SET is_active = $2 WHERE rule_id = $1', [ruleId, active])
+}
+
+/** Read-only checks scoped to imported rows; PERSON lookups may come from an earlier zip. */
+export async function checkObservations(db: PGlite, zipName: string): Promise<ObservationResult> {
+  await syncObservationRules(db)
+  const compiled = new Map(observationRules().map((rule) => [rule.id, rule]))
+  const findings: ObservationFinding[] = []
+  // The register decides which rules run and in what order; the code decides what each one asks.
+  for (const registered of await listObservationRules(db)) {
+    const rule = compiled.get(registered.id)
+    if (!rule || !registered.active) continue
+    const result = await db.query<{ checked: number; skipped: number; found: number }>(`
+      WITH candidates AS (${rule.sql}) SELECT
+        COUNT(*) FILTER (WHERE eligible)::int AS checked,
+        COUNT(*) FILTER (WHERE eligible IS NOT TRUE)::int AS skipped,
+        COUNT(*) FILTER (WHERE eligible AND failed)::int AS found FROM candidates`, [zipName])
+    findings.push({ id: rule.id, tableName: registered.tableName, detail: registered.detail,
+      level: registered.level, ...result.rows[0] })
+  }
+  return { zipName, checkedAt: new Date().toISOString(), findings }
+}
+
+export async function observationRows(db: PGlite, zipName: string, ruleId: string): Promise<FailingRows> {
+  const rule = observationRules().find((entry) => entry.id === ruleId)
+  if (!rule) throw new Error('ไม่รู้จักเกณฑ์ข้อสังเกต')
+  // The heading follows the register, so a reworded rule reads the same here as in the result list.
+  const { rows: registered } = await db.query<{ detail: string }>(
+    'SELECT detail FROM observ_check WHERE rule_id = $1', [ruleId])
+  const detail = registered[0]?.detail ?? rule.detail
+  const result = await db.query<Record<string, string | number>>(`WITH candidates AS (${rule.sql})
+    SELECT ${rule.columns.map(quote).join(', ')}, COUNT(*) OVER()::int AS total
+    FROM candidates WHERE eligible AND failed ORDER BY ${rule.columns.map(quote).join(', ')} LIMIT 100`, [zipName])
+  return { tableName: rule.tableName, columnName: '', detail, columns: rule.columns,
+    rows: result.rows.map((row) => rule.columns.map((column) => String(row[column] ?? ''))),
+    total: Number(result.rows[0]?.total ?? 0) }
+}
+
 /** The stored result of the last structure check of a zip. */
 export async function structureResult(db: PGlite, zipName: string): Promise<StructureCheckResult | null> {
   const { rows } = await db.query<{
-    tableName: string; columnName: string; rule: string; detail: string; tableRows: number
+    tableName: string; columnName: string; fieldDescription: string; rule: string; detail: string; tableRows: number
     found: number; level: string; rowCount: number; ruleCount: number; checkedAt: string
   }>(`SELECT table_name AS "tableName", column_name AS "columnName", rule, detail,
         table_rows AS "tableRows", found, level,
-        row_count AS "rowCount", rule_count AS "ruleCount", checked_at AS "checkedAt"
-      FROM structure_check_log WHERE zip_name = $1
+        row_count AS "rowCount", rule_count AS "ruleCount", checked_at AS "checkedAt",
+        COALESCE((SELECT COALESCE(NULLIF(d.description, ''), d.caption, '') FROM c_files_schema d
+          WHERE LOWER(d.table_name) = l.table_name AND LOWER(d.name) = l.column_name AND d.is_active = 1
+          ORDER BY d.no LIMIT 1), '') AS "fieldDescription"
+      FROM structure_check_log l WHERE zip_name = $1
       ORDER BY CASE level WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, found DESC, table_name, column_name`,
     [zipName])
   if (!rows.length) return null
@@ -460,8 +652,8 @@ export async function structureResult(db: PGlite, zipName: string): Promise<Stru
     rows: rows[0].rowCount,
     rules: rows[0].ruleCount,
     checkedAt: rows[0].checkedAt,
-    findings: rows.filter((row) => row.rule !== 'passed').map(({ tableName, columnName, rule, detail, tableRows, found, level }) =>
-      ({ tableName, columnName, rule, detail, tableRows, found, level })),
+    findings: rows.filter((row) => row.rule !== 'passed').map(({ tableName, columnName, fieldDescription, rule, detail, tableRows, found, level }) =>
+      ({ tableName, columnName, fieldDescription, rule, detail, tableRows, found, level })),
   }
 }
 
@@ -483,7 +675,10 @@ export async function countByFiscalYears(db: PGlite, table: string, years: numbe
   const definition = structure.tables.find((entry) => entry.name === table)
   if (!definition) throw new Error(`ไม่รู้จักแฟ้ม ${table}`)
   const column = countingColumn(definition)
-  if (!years.length) return { table, column, years: [] }
+  // แฟ้มสะสม carries no service date of its own, so it falls back to `d_update` — the month a row
+  // was last edited is not a month of activity, so those files are reported by fiscal year only.
+  const cumulative = column === 'd_update'
+  if (!years.length) return { table, column, cumulative, years: [] }
 
   const from = `${Math.min(...years) - 544}10`
   const to = `${Math.max(...years) - 543}09`
@@ -497,6 +692,7 @@ export async function countByFiscalYears(db: PGlite, table: string, years: numbe
   return {
     table,
     column,
+    cumulative,
     years: [...years].sort((first, second) => second - first).map((fiscalYear) => {
       const months = Array.from({ length: 12 }, (_unused, index) => {
         const month = ((9 + index) % 12) + 1

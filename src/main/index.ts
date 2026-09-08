@@ -1,9 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { basename, join } from 'node:path'
 import { stat } from 'node:fs/promises'
-import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listStandardFiles, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
+import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
 import { checkImportZip, eachZipTextEntry, parsePipeFile } from './Import52Files'
 import type { IpcMainInvokeEvent } from 'electron'
+import { checkObservations, observationRows } from './database'
 
 let window: BrowserWindow | null = null
 let db: Awaited<ReturnType<typeof openDatabase>> | undefined
@@ -136,6 +137,22 @@ if (!app.requestSingleInstanceLock()) {
       authorizedWindow(event)
       return checkImportStructure(db!, String(zipName ?? ''))
     })
+    ipcMain.handle('observations:check', (event, zipName: unknown) => {
+      authorizedWindow(event)
+      return checkObservations(db!, String(zipName ?? ''))
+    })
+    ipcMain.handle('observations:rows', (event, zipName: unknown, rule: unknown) => {
+      authorizedWindow(event)
+      return observationRows(db!, String(zipName ?? ''), String(rule ?? ''))
+    })
+    ipcMain.handle('observations:rules', (event) => {
+      authorizedWindow(event)
+      return listObservationRules(db!)
+    })
+    ipcMain.handle('observations:set-active', (event, rule: unknown, active: unknown) => {
+      authorizedWindow(event)
+      return setObservationRuleActive(db!, String(rule ?? ''), active === true)
+    })
     ipcMain.handle('structure:result', (event, zipName: unknown) => {
       authorizedWindow(event)
       return structureResult(db!, String(zipName ?? ''))
@@ -207,6 +224,10 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('files:list')
     ipcMain.removeHandler('files:count-by-year')
     ipcMain.removeHandler('structure:check')
+    ipcMain.removeHandler('observations:check')
+    ipcMain.removeHandler('observations:rows')
+    ipcMain.removeHandler('observations:rules')
+    ipcMain.removeHandler('observations:set-active')
     ipcMain.removeHandler('structure:result')
     ipcMain.removeHandler('structure:failing-rows')
     ipcMain.removeHandler('import:log')

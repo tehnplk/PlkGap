@@ -6,7 +6,7 @@ import type { IconName } from './Icon'
 import { Import52Files } from './pages/files43/Import52Files'
 import { DataCount } from './pages/files43/DataCount'
 import { StructureCheckPage } from './pages/files43/StructureCheckPage'
-import { StandardCheckPage } from './pages/files43/StandardCheckPage'
+import { ObservationCheckPage } from './pages/files43/ObservationCheckPage'
 import { IndicatorTemplatePage } from './pages/analytics/IndicatorTemplatePage'
 import { RevenueTemplatePage } from './pages/analytics/RevenueTemplatePage'
 import { HouseholdMapPage } from './pages/mapping/HouseholdMapPage'
@@ -20,7 +20,7 @@ import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
 type Kind =
-  | 'import' | 'data-count' | 'structure-check' | 'standard-check'
+  | 'import' | 'data-count' | 'structure-check' | 'observation-check'
   | 'kpi-template' | 'revenue-template'
   | 'household-map'
   | 'line-morprom'
@@ -34,8 +34,8 @@ type Group = { id: string; label: string; icon: IconName; collapsed?: boolean; i
 const titles: Record<Kind, string> = {
   import: 'นำเข้าข้อมูล',
   'data-count': 'ปริมาณข้อมูล',
-  'structure-check': 'ตรวจตามโครงสร้าง',
-  'standard-check': 'ตรวจตามหลักวิชาการ',
+  'structure-check': 'คุณภาพตามโครงสร้าง',
+  'observation-check': 'คุณภาพตามข้อสังเกต',
   'kpi-template': 'เทมเพลตตัวชี้วัด',
   'revenue-template': 'เทมเพลตงานจัดเก็บรายได้',
   'household-map': 'ตำแหน่งครัวเรือน (แฟ้ม Home)',
@@ -50,7 +50,7 @@ const icons: Record<Kind, IconName> = {
   import: 'upload',
   'data-count': 'counter',
   'structure-check': 'structure',
-  'standard-check': 'book',
+  'observation-check': 'book',
   'kpi-template': 'gauge',
   'revenue-template': 'money',
   'household-map': 'home',
@@ -66,7 +66,7 @@ const sources: Record<Kind, string> = {
   import: 'Import52Files',
   'data-count': 'DataCount',
   'structure-check': 'StructureCheckPage',
-  'standard-check': 'StandardCheckPage',
+  'observation-check': 'ObservationCheckPage',
   'kpi-template': 'IndicatorTemplatePage',
   'revenue-template': 'RevenueTemplatePage',
   'household-map': 'HouseholdMapPage',
@@ -79,7 +79,7 @@ const sources: Record<Kind, string> = {
 }
 const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
 const groups: Group[] = [
-  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'standard-check', 'data-count'] },
+  { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'observation-check', 'data-count'] },
   { id: 'analytics', label: 'ระบบวิเคราะห์ข้อมูล', icon: 'chart', items: ['kpi-template', 'revenue-template'] },
   { id: 'mapping', label: 'ระบบแผนที่', icon: 'map', items: ['household-map'] },
   { id: 'messaging', label: 'ระบบสื่อสาร', icon: 'message', items: ['line-morprom'] },
@@ -221,7 +221,7 @@ export function App() {
           {item.id === 'import' && <Import52Files />}
           {item.id === 'data-count' && <DataCount />}
           {item.id === 'structure-check' && <StructureCheckPage />}
-          {item.id === 'standard-check' && <StandardCheckPage />}
+          {item.id === 'observation-check' && <ObservationCheckPage />}
           {item.id === 'kpi-template' && <IndicatorTemplatePage />}
           {item.id === 'revenue-template' && <RevenueTemplatePage />}
           {item.id === 'household-map' && <HouseholdMapPage />}
