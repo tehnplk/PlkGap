@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join } from 'node:path'
-import { databaseStatus, openDatabase } from './database'
+import { databaseStatus, findHospital, listImportLog, listStandardFiles, openDatabase } from './database'
+import { checkImportZip } from './importFiles'
 import type { IpcMainInvokeEvent } from 'electron'
 
 let window: BrowserWindow | null = null
@@ -97,6 +98,30 @@ if (!app.requestSingleInstanceLock()) {
       }
       return databaseStatus(db!, path)
     })
+    ipcMain.handle('hospital:find', (event, hospcode: unknown) => {
+      authorizedWindow(event)
+      return findHospital(db!, String(hospcode ?? ''))
+    })
+    // Where the 43-file zips are dropped. Tests redirect it so they never read the real Desktop.
+    const importDirectory = () => process.env.PLKGAP_IMPORT_DIR ?? app.getPath('desktop')
+    ipcMain.handle('import:choose-file', async (event) => {
+      const target = authorizedWindow(event)
+      const result = await dialog.showOpenDialog(target, {
+        title: 'เลือกไฟล์ 52 แฟ้ม',
+        defaultPath: importDirectory(),
+        properties: ['openFile'],
+        filters: [{ name: 'ไฟล์ ZIP', extensions: ['zip'] }],
+      })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    })
+    ipcMain.handle('import:log', (event) => {
+      authorizedWindow(event)
+      return listImportLog(db!)
+    })
+    ipcMain.handle('import:check-file', async (event, path: unknown) => {
+      authorizedWindow(event)
+      return checkImportZip(String(path ?? ''), await listStandardFiles(db!))
+    })
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -114,6 +139,10 @@ if (!app.requestSingleInstanceLock()) {
     if (closing) return
     closing = true
     ipcMain.removeHandler('database:status')
+    ipcMain.removeHandler('hospital:find')
+    ipcMain.removeHandler('import:choose-file')
+    ipcMain.removeHandler('import:log')
+    ipcMain.removeHandler('import:check-file')
     void db.close().catch(console.error).finally(() => app.exit())
   })
 }

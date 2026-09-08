@@ -54,6 +54,25 @@
 ถ้าอยากให้หน้านั้นโผล่ใน sidebar ต้องเพิ่ม `Kind` เข้าไปในกลุ่มใดกลุ่มหนึ่งของ `groups` (`App.tsx`) ด้วย
 เมนู Window ได้รายการใหม่เองอัตโนมัติจากหน้าต่างที่เปิดอยู่ ส่วนเมนู File/เกี่ยวกับ ถ้าอยากมีรายการเปิดหน้านั้น ต้องเพิ่มเอง
 
+## เวอร์ชัน: `package.json`
+
+**เลขเวอร์ชันอยู่ที่ field `version` ใน `package.json` ที่เดียว** ห้ามสร้างไฟล์เวอร์ชันแยก
+และห้าม hardcode เลขเวอร์ชันไว้ที่ไหนอีก
+
+- `electron.vite.config.ts` อ่านค่าจาก `package.json` แล้วฉีดเป็น `__APP_VERSION__` ตอน build
+  (renderer เป็น sandbox อ่านไฟล์เองไม่ได้ จึงต้องฉีดตอน build ไม่ใช่อ่านตอน runtime)
+- `TitleBar.tsx` ใช้ `__APP_VERSION__` แสดงที่ main title bar ต่อจากชื่อแอป → `PlkGap version 1.0.1`
+- type ของ `__APP_VERSION__` ประกาศไว้ใน `src/renderer/src/env.d.ts` แล้ว
+
+### กติกาการอัปเวอร์ชัน
+
+- **เมื่อ user สั่ง build (ทำตัวติดตั้ง) ต้องแจ้งเตือนและถาม user ก่อนเสมอว่า "จะอัปเวอร์ชันไหม"**
+  ห้ามอัปเองเงียบ ๆ และห้ามข้ามคำถามไป build เลย
+- ถ้า user ตอบว่าอัป — แก้ `version` ใน `package.json` ตามที่ user บอก แล้วค่อย build
+- ถ้า user ตอบว่าไม่อัป — build ด้วยเลขเดิม ไม่ต้องแตะไฟล์
+- กติกานี้ใช้กับกรณีที่ **user เป็นคนสั่ง build** เท่านั้น
+  ส่วน `npm run build` / `npm test` ที่ agent รันเองเพื่อตรวจงานระหว่างแก้โค้ด ไม่ต้องถาม
+
 ## ฐานข้อมูล: PGlite + PostGIS
 
 DB เป็น **embedded PostgreSQL (WASM) รันในโปรเซส Electron** ไม่มี server, ไม่มีพอร์ต, ไม่มี Docker
@@ -72,8 +91,24 @@ DB เป็น **embedded PostgreSQL (WASM) รันในโปรเซส E
 - **ปิดแอปมี 2 ขั้น ห้ามข้าม** (1) confirm dialog ที่ event `close` ของหน้าต่าง แล้ว (2) `before-quit`
   ขวางไว้จน `db.close()` เสร็จ ดักที่ event `close` ไม่ใช่ที่ IPC handler `window:close` เพื่อให้ครอบ
   ทุกทางที่ปิดได้ (ปุ่ม X, เมนู Exit, Alt+F4, taskbar) — flag `confirming`/`confirmedExit` กัน dialog ซ้อนและกันวนซ้ำ
-- **ไม่มีการสร้างตารางตอน startup** ถ้าจะมี schema/migration ให้ทำใน `openDatabase()` ให้ idempotent
-  (`CREATE ... IF NOT EXISTS`) และรันก่อน return
+- **schema ทั้งหมด init ครั้งเดียวตอนรันครั้งแรก** ทำใน `initializeSchema(db)` ที่ `openDatabase()` เรียกก่อน return
+  (แอปนี้ไม่มีตัว installer แยก "รันครั้งแรกหลังติดตั้ง" จึงคือ setup ของโปรแกรม)
+  ตาราง `schema_init` จดไว้ว่า component ไหนติดตั้งเวอร์ชันอะไรแล้ว การเปิดแอปครั้งถัดไปอ่านแค่แถวเดียวต่อ component แล้วข้าม
+  ห้ามเขียน migration ที่ไล่ `CREATE`/`ALTER` ใหม่ทุกครั้งที่เปิดแอป
+
+### สองกลุ่มตารางที่ init คนละแบบ (ห้ามสลับ)
+
+- **`c_*` (120 ตาราง reference) — ของ upstream ล้วน ๆ replace ทั้งชุดได้**
+  ข้อมูลมาจาก `src/main/reference/c-tables.json` ทั้งโครงสร้างและแถว ผู้ใช้ไม่ได้แก้ตารางกลุ่มนี้
+  เมื่อไฟล์เวอร์ชันใหม่ `loadReferenceTables()` จะ `DROP` แล้วสร้างใหม่พร้อมโหลดแถวทั้งหมด
+- **52 แฟ้มมาตรฐาน (`person`, `home`, `service`, ...) — เก็บข้อมูลที่ผู้ใช้ import สะสมไว้ ห้ามลบเด็ดขาด**
+  โครงสร้างมาจาก `src/main/reference/f43-tables.json` แต่ **ไม่มีข้อมูลติดมา**
+  `createFileTables()` ต้องเป็น additive อย่างเดียวตลอดไป — `CREATE TABLE IF NOT EXISTS`,
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
+  **ห้ามมี `DROP TABLE`, `DROP COLUMN` หรือ `TRUNCATE`** แม้ตอนอัปเกรดโครงสร้างเป็นเวอร์ชันใหม่
+  (มีเทสต์ใน `scripts/test-database.ts` ยืนยันว่าแถวที่ import ไว้ยังอยู่ครบหลัง re-init และหลังอัปเกรดโครงสร้าง)
+- ทั้งสองไฟล์ JSON สร้างจาก `scripts/pull-reference-tables.mjs` ที่ดึงจาก SUB-HDC
+  รายชื่อ 52 แฟ้มอ่านจากตาราง `c_file` ไม่ต้องมา hardcode เอง
 
 ### เพิ่ม operation ใหม่ ต้องแตะ 4 จุด (เรียงตามลำดับนี้)
 

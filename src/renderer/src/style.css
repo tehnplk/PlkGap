@@ -36,6 +36,7 @@ svg { flex-shrink: 0; }
 .dot { width: 6px; height: 6px; background: #278344; display: inline-block; border-radius: 50%; flex-shrink: 0; }
 .window-content { padding: 28px; overflow: auto; flex: 1; min-height: 0; }h2 { font-size: 24px; font-weight: 600; letter-spacing: -.6px; margin: 0 0 10px; }.window-content p:not(.eyebrow) { font-size: 12px; line-height: 1.8; color: var(--muted); }.content-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }.badge { background: #e5f1eb; color: #21654b; border-radius: 20px; padding: 5px 10px; font-size: 10px; }.badge.error { background: #fce8e8; color: #a83030; }.error-dot { background: #b64949; }.pending-dot { background: #b18a39; }
  .section-title { font-size: 13px; font-weight: 600; margin: 22px 0 0; color: #39244f; }
+.toolbar-row .section-title { margin: 0; }
 .hint-text { font-size: 11px !important; margin: 6px 0 0 !important; color: #80708f !important; }
 .toolbar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
 .field-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
@@ -53,6 +54,15 @@ svg { flex-shrink: 0; }
 .stat-card { border: 1px solid var(--line); border-radius: 7px; padding: 13px 14px; background: #fff; }
 .stat-card small { display: block; color: var(--muted); font-size: 10px; }
 .stat-card strong { display: block; font-size: 19px; font-weight: 600; margin-top: 5px; letter-spacing: -.5px; color: #39244f; }
+.import-progress { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; padding: 12px 14px; background: #fff; }
+.import-progress .progress { margin-top: 0; }
+.browse-button { font-family: Consolas, monospace; letter-spacing: 1px; padding: 7px 12px; }
+.data-table .mock-button { padding: 4px 10px; font-size: 11px; }
+.check-problems { margin: 8px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.7; color: #a83030; }
+.check-problems li { overflow-wrap: anywhere; }
+.file-pick { padding: 0; cursor: pointer; }
+.file-pick:hover code { background: #ede2fa; color: var(--accent); }
+.code-cell small { color: var(--muted); font-size: 10px; }
 .progress { height: 6px; border-radius: 4px; background: #eee3f9; overflow: hidden; margin-top: 8px; }
 .progress > span { display: block; height: 100%; background: var(--accent); }
 .progress > span.below { background: #d38b2a; }
@@ -61,6 +71,10 @@ svg { flex-shrink: 0; }
 .person-avatar { display: flex; padding: 10px; border-radius: 8px; background: #eee3f9; color: var(--accent); }
 .person-card strong { display: block; font-size: 13px; font-weight: 600; color: #39244f; }
 .person-card small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+.detail-grid { display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr); margin: 18px 0 0; border-top: 1px solid var(--line); max-width: 720px; }
+.detail-grid dt { font-size: 11px; font-weight: 600; color: #473655; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); }
+.detail-grid dd { margin: 0; padding: 10px 0; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.detail-grid dd code { font-size: 10px; background: #f7f3fb; padding: 2px 5px; border-radius: 3px; }
 .mock-note { border-left: 3px solid #d8c1ef; padding: 8px 12px; background: #faf7fd; border-radius: 0 6px 6px 0; margin-top: 18px; }
 .mock-note p { margin: 0 !important; font-size: 11px !important; }
 .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 130px; margin-top: 14px; padding: 16px 12px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
@@ -105,6 +119,7 @@ svg { flex-shrink: 0; }
 .main-titlebar .menu-bar { height: 32px; padding: 0; background: transparent; app-region: no-drag; -webkit-app-region: no-drag; }
 .main-titlebar .menu-trigger { height: 32px; }
 .main-titlebar .main-title { flex: 1; min-width: 0; justify-content: center; padding: 0 12px; color: #6d607d; }
+.main-version { color: #8d7f9c; font-size: 11px; }
 .main-titlebar .main-window-controls { flex-shrink: 0; }
 
 .window-content.flush { padding: 0; }

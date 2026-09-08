@@ -1,11 +1,35 @@
 import { _electron as electron, expect } from '@playwright/test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import yazl from 'yazl'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import reference from '../src/main/reference/c-tables.json' with { type: 'json' }
+import files from '../src/main/reference/f43-tables.json' with { type: 'json' }
 
+const referenceRows = reference.tables.reduce((sum, table) => sum + table.rows.length, 0)
+// A fresh temp userData is exactly the state of a brand new machine after install.
 const directory = await mkdtemp(join(tmpdir(), 'plkgap-ui-test-'))
-const env = { ...process.env, PLKGAP_TEST_DATA_DIR: directory }
+// A stand-in for the Desktop, so the test never reads the real one.
+const importDirectory = await mkdtemp(join(tmpdir(), 'plkgap-import-test-'))
+const standardFiles = files.tables.map((table) => table.name)
+function writeZip(path, entries) {
+  return new Promise((resolve, reject) => {
+    const zip = new yazl.ZipFile()
+    for (const name of entries) zip.addBuffer(Buffer.from('HOSPCODE|PID'), name)
+    zip.outputStream.pipe(createWriteStream(path)).on('close', resolve).on('error', reject)
+    zip.end()
+  })
+}
+// A zip nested in a folder, a flat one, and one that is not the 52 files at all.
+const validZip = join(importDirectory, 'F43_07494_20260819111824.ZIP')
+const flatZip = join(importDirectory, 'F43_FLAT.zip')
+const badZip = join(importDirectory, 'F43_BAD.zip')
+await writeZip(validZip, standardFiles.map((name) => `F43_07494_20260819111826/${name.toUpperCase()}.txt`))
+await writeZip(flatZip, standardFiles.map((name) => `${name}.txt`))
+await writeZip(badZip, ['F43_BAD/PERSON.txt', 'F43_BAD/holiday-photo.jpg'])
+const env = { ...process.env, PLKGAP_TEST_DATA_DIR: directory, PLKGAP_IMPORT_DIR: importDirectory }
 delete env.ELECTRON_RUN_AS_NODE
 let application
 try {
@@ -14,6 +38,11 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('status').filter({ hasText: 'Connected' }).waitFor({ timeout: 60000 })
+  // First run on a new machine: the c_* reference data is already usable and the 52 files exist empty.
+  const statusBar = page.locator('.status-bar')
+  await expect(statusBar).toContainText(`${reference.tables.length} ตารางอ้างอิง`)
+  await expect(statusBar).toContainText(`${referenceRows.toLocaleString('en-US')} รายการ`)
+  await expect(statusBar).toContainText(`${files.tables.length} แฟ้มพร้อมนำเข้า`)
   await mkdir('artifacts', { recursive: true })
   await page.screenshot({ path: 'artifacts/plkgap-main-ui.png', fullPage: true })
   const navigation = page.getByRole('navigation', { name: 'Sidebar navigation' })
@@ -26,6 +55,7 @@ try {
   const statusBounds = await page.locator('.status-bar').boundingBox()
   const titleBounds = await page.locator('.main-titlebar').boundingBox()
   assert.equal(titleBounds.y, 0, 'Custom title bar starts at the top')
+  await expect(page.locator('.main-title')).toHaveText(/^PlkGap version \d+\.\d+\.\d+$/)
   assert.equal(menuBounds.y, 0, 'Menu is in the top title-bar row')
   assert.equal(menuBounds.height, titleBounds.height, 'Menu shares the title-bar height')
   assert.equal(workspaceBounds.y, menuBounds.y + menuBounds.height, 'Workspace starts directly below main menu')
@@ -45,13 +75,55 @@ try {
   await page.screenshot({ path: 'artifacts/plkgap-sidebar-groups.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
-  const importWindow = page.getByRole('region', { name: 'นำเข้าข้อมูล - ImportPage window' })
+  const importWindow = page.getByRole('region', { name: 'นำเข้าข้อมูล - Import52FilePage window' })
   await expect(importWindow).toBeVisible()
   await expect(importWindow).toHaveClass(/maximized/)
   assert.deepEqual(await page.locator('.workspace').boundingBox(), workspaceBounds, 'Opening a child does not shrink the workspace')
-  await expect(importWindow.locator('tbody tr')).toHaveCount(8)
+  // The grid is the import history: empty until something is actually imported.
+  await expect(importWindow.locator('tbody tr')).toHaveCount(0)
+  await expect(importWindow).toContainText('ยังไม่มีประวัติการนำเข้า')
+  await expect(importWindow.getByRole('button', { name: 'ล้างประวัติ' })).toHaveCount(0)
+  await expect(importWindow.locator('.section-title')).toHaveText('ประวัติการนำเข้า')
+  assert.deepEqual(await importWindow.locator('thead th').allInnerTexts(),
+    ['#', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'สถานะ', 'คุณภาพโครงสร้าง'])
   // Child window titles carry the page component that renders them.
-  await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - ImportPage')
+  await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - Import52FilePage')
+
+  // The [...] picker is a native dialog, so stub it the same way the exit dialog is stubbed below.
+  await expect(importWindow.getByRole('button', { name: 'นำเข้า', exact: true })).toBeDisabled()
+  const pick = (chosen) => application.evaluate(({ dialog }, file) => {
+    globalThis.openDialogOptions = undefined
+    dialog.showOpenDialog = async (_window, options) => {
+      globalThis.openDialogOptions = options
+      return { canceled: false, filePaths: [file] }
+    }
+  }, chosen)
+  const browse = () => importWindow.getByRole('button', { name: 'เรียกดูไฟล์' }).click()
+  const importButton = importWindow.getByRole('button', { name: 'นำเข้า', exact: true })
+
+  await pick(validZip)
+  await browse()
+  await expect(importWindow.getByLabel('เลือกไฟล์')).toHaveValue(validZip)
+  assert.deepEqual(await application.evaluate(() => globalThis.openDialogOptions.filters),
+    [{ name: 'ไฟล์ ZIP', extensions: ['zip'] }], 'The picker is limited to zip files')
+  assert.equal(await application.evaluate(() => globalThis.openDialogOptions.defaultPath), importDirectory,
+    'The picker opens in the import folder')
+  // Only a zip holding exactly the 52 standard .txt files may be imported — nested in a folder or flat.
+  await expect(importWindow.getByRole('status')).toContainText('ครบ 52 แฟ้ม')
+  await expect(importButton).toBeEnabled()
+  await pick(flatZip)
+  await browse()
+  await expect(importWindow.getByLabel('เลือกไฟล์')).toHaveValue(flatZip)
+  await expect(importWindow.getByRole('status')).toContainText('ครบ 52 แฟ้ม')
+  await expect(importButton).toBeEnabled()
+  // Anything else is refused, and the reason is spelled out.
+  await pick(badZip)
+  await browse()
+  await expect(importWindow.getByRole('status')).toContainText('นำเข้าไม่ได้')
+  await expect(importWindow.locator('.check-problems')).toContainText('ไม่ใช่ 52 แฟ้มมาตรฐาน')
+  await expect(importWindow.locator('.check-problems')).toContainText('holiday-photo.jpg')
+  await expect(importWindow.locator('.check-problems')).toContainText('ขาด 51 แฟ้ม')
+  await expect(importButton).toBeDisabled()
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false')
   assert.ok((await page.locator('.workspace').boundingBox()).width > workspaceBounds.width, 'Collapsing gives space back to MDI')
@@ -64,7 +136,7 @@ try {
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
   await expect(importWindow).toHaveCount(1)
 
-  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - ImportPage' }).click()
+  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52FilePage' }).click()
   await expect(importWindow).not.toHaveClass(/maximized/)
   const beforeMove = await importWindow.boundingBox()
   await page.mouse.move(beforeMove.x + 100, beforeMove.y + 18)
@@ -79,12 +151,12 @@ try {
   await page.mouse.move(handle.x + 72, handle.y + 12, { steps: 8 })
   await page.mouse.up()
   assert.ok((await importWindow.boundingBox()).width > afterMove.width + 40, 'Child window resizes')
-  await importWindow.getByRole('button', { name: 'Maximize นำเข้าข้อมูล - ImportPage' }).click()
+  await importWindow.getByRole('button', { name: 'Maximize นำเข้าข้อมูล - Import52FilePage' }).click()
   await expect(importWindow).toHaveClass(/maximized/)
-  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - ImportPage' }).click()
-  await importWindow.getByRole('button', { name: 'Minimize นำเข้าข้อมูล - ImportPage' }).click()
+  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52FilePage' }).click()
+  await importWindow.getByRole('button', { name: 'Minimize นำเข้าข้อมูล - Import52FilePage' }).click()
   await expect(importWindow).toHaveCount(0)
-  await page.locator('.window-dock').getByRole('button', { name: 'นำเข้าข้อมูล - ImportPage', exact: true }).click()
+  await page.locator('.window-dock').getByRole('button', { name: 'นำเข้าข้อมูล - Import52FilePage', exact: true }).click()
   await expect(importWindow).toBeVisible()
 
   await navigation.getByRole('button', { name: 'ไข้เลือดออก', exact: true }).click()
@@ -143,7 +215,16 @@ try {
 
   await navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true }).click()
   const serviceUnit = page.getByRole('region', { name: 'ตั้งค่าหน่วยบริการ - ServiceUnitPage window' })
-  await expect(serviceUnit.getByLabel('รหัสหน่วยบริการ (HCODE)')).toHaveValue('10726')
+  // Looks the unit up in the seeded c_hospital table over IPC — proves reference data is usable.
+  await serviceUnit.getByLabel('รหัสหน่วยบริการ (HCODE)').fill('07476')
+  await serviceUnit.getByRole('button', { name: 'ค้นหา' }).click()
+  await expect(serviceUnit).toContainText('โรงพยาบาลส่งเสริมสุขภาพตำบลวังน้ำคู้')
+  await expect(serviceUnit).toContainText('รพ.สต.วังน้ำคู้')
+  await expect(serviceUnit).toContainText('เมืองพิษณุโลก')
+  await expect(serviceUnit).toContainText('พิษณุโลก')
+  await serviceUnit.getByLabel('รหัสหน่วยบริการ (HCODE)').fill('99999')
+  await serviceUnit.getByRole('button', { name: 'ค้นหา' }).click()
+  await expect(serviceUnit.getByRole('status')).toContainText('ไม่พบหน่วยบริการรหัส 99999')
   await page.screenshot({ path: 'artifacts/plkgap-settings.png', fullPage: true })
 
   await page.getByRole('menuitem', { name: 'เกี่ยวกับ', exact: true }).click()
@@ -225,4 +306,5 @@ try {
 } finally {
   if (application) await application.close()
   await rm(directory, { recursive: true, force: true })
+  await rm(importDirectory, { recursive: true, force: true })
 }

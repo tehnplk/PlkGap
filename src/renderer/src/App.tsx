@@ -3,7 +3,7 @@ import type { KeyboardEvent, PointerEvent } from 'react'
 import type { DatabaseStatus } from '../../shared/api'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
-import { ImportPage } from './pages/files43/ImportPage'
+import { Import52FilePage } from './pages/files43/Import52FilePage'
 import { StructureCheckPage } from './pages/files43/StructureCheckPage'
 import { StandardCheckPage } from './pages/files43/StandardCheckPage'
 import { IndicatorTemplatePage } from './pages/analytics/IndicatorTemplatePage'
@@ -60,7 +60,7 @@ const icons: Record<Kind, IconName> = {
 }
 // Basename of the page component that renders each Kind — shown after the title in window chrome.
 const sources: Record<Kind, string> = {
-  import: 'ImportPage',
+  import: 'Import52FilePage',
   'structure-check': 'StructureCheckPage',
   'standard-check': 'StandardCheckPage',
   'kpi-template': 'IndicatorTemplatePage',
@@ -214,7 +214,7 @@ export function App() {
       {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
         <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
         <div className={flushPages.includes(item.id) ? 'window-content flush' : 'window-content'}>
-          {item.id === 'import' && <ImportPage />}
+          {item.id === 'import' && <Import52FilePage />}
           {item.id === 'structure-check' && <StructureCheckPage />}
           {item.id === 'standard-check' && <StandardCheckPage />}
           {item.id === 'kpi-template' && <IndicatorTemplatePage />}
@@ -232,6 +232,6 @@ export function App() {
     {windows.some((item) => item.minimized) && <div className="window-dock" aria-label="Open windows">{windows.filter((item) => item.minimized).map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${windowTitle(item.id)}` : windowTitle(item.id)}><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
     </div>
     </div>
-    {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>Local database</span><span className="status-end">{active ? windowTitle(active.id) : 'Ready'}<span className="status-divider" />PlkGap</span></footer>}
+    {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>{status ? `${status.referenceTables} ตารางอ้างอิง · ${status.referenceRows.toLocaleString('en-US')} รายการ · ${status.fileTables} แฟ้มพร้อมนำเข้า` : 'Local database'}</span><span className="status-end">{active ? windowTitle(active.id) : 'Ready'}<span className="status-divider" />PlkGap</span></footer>}
   </main>
 }

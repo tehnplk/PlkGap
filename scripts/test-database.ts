@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openDatabase, databaseStatus, loadReferenceTables, createFileTables } from '../src/main/database.ts'
+import { openDatabase, databaseStatus, loadReferenceTables, createFileTables, createAppTables, listImportLog } from '../src/main/database.ts'
+import type { FileStructure } from '../src/main/database.ts'
+import fileStructure from '../src/main/reference/f43-tables.json' with { type: 'json' }
 
 async function main() {
 const directory = await mkdtemp(join(tmpdir(), 'plkgap-db-test-'))
@@ -20,7 +22,8 @@ try {
   assert.deepEqual(rows, [{ point: 'POINT(100.2659 16.8211)', srid: 4326, valid: true }])
   console.log('PASS: PostGIS spatial query and persistence after reopen')
 
-  const load = await db.query<{ table_count: number; row_count: number }>('SELECT table_count, row_count FROM reference_load')
+  const load = await db.query<{ table_count: number; row_count: number }>(
+    `SELECT table_count, row_count FROM schema_init WHERE component = 'reference'`)
   assert.equal(load.rows.length, 1, 'reference load is recorded once')
   assert.ok(load.rows[0].table_count >= 120, 'every c_* reference table is created')
   assert.ok(load.rows[0].row_count > 4000, 'reference rows are seeded')
@@ -42,7 +45,7 @@ try {
   assert.deepEqual(typed.rows[0], { no: 1, is_active: 1 }, 'integer columns stay numeric')
 
   const again = await loadReferenceTables(db)
-  assert.equal(again.reloaded, false, 'a second load of the same version is a no-op')
+  assert.equal(again.applied, false, 'a second load of the same version is a no-op')
   console.log(`PASS: ${load.rows[0].table_count} SUB-HDC c_* reference tables (${load.rows[0].row_count} rows) seeded idempotently`)
 
   const files = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM c_file`)
@@ -72,8 +75,66 @@ try {
   await db.query('DELETE FROM person')
 
   const rerun = await createFileTables(db)
+  assert.equal(rerun.applied, false, 'creating the file tables again is a no-op')
   assert.equal(rerun.created, 0, 'creating the file tables again adds nothing')
   console.log(`PASS: ${rerun.table_count} 43-file tables created empty with SUB-HDC columns, keys and indexes`)
+
+  // Setup happens once: reopening the database must not redo or re-stamp any of it.
+  const before = await db.query<{ component: string; initialized_at: Date }>(
+    'SELECT component, initialized_at FROM schema_init ORDER BY component')
+  assert.deepEqual(before.rows.map((row) => row.component), ['app', 'files43', 'reference'], 'every component is recorded')
+  await db.close()
+  db = await openDatabase(join(directory, 'db'))
+  const after = await db.query<{ component: string; initialized_at: Date }>(
+    'SELECT component, initialized_at FROM schema_init ORDER BY component')
+  assert.deepEqual(after.rows, before.rows, 'a later start reuses the schema instead of rebuilding it')
+  assert.equal((await db.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'reference_load'`)).rows.length,
+    0, 'the old reference_load marker is gone')
+  console.log('PASS: schema is initialized once and skipped on later starts')
+
+  // The 43-file tables accumulate imported rows, so a newer structure file must only ever add.
+  await db.query(`INSERT INTO person (hospcode, pid, cid) VALUES ('07476', '00042', '1234567890123')`)
+  await db.query(`INSERT INTO home (hospcode, hid) VALUES ('07476', '00042')`)
+  const newer = structuredClone(fileStructure) as FileStructure
+  newer.pulledAt = new Date().toISOString()
+  newer.tables.find((table) => table.name === 'person')!.columns.push(
+    { name: 'new_upstream_column', type: 'varchar', length: 20, nullable: false, default: "''" })
+  newer.tables.push({ name: 'brand_new_file', columns: [
+    { name: 'hospcode', type: 'varchar', length: 10, nullable: false, default: "''" },
+  ], primaryKey: ['hospcode'], indexes: [] })
+
+  const upgrade = await createFileTables(db, newer)
+  assert.equal(upgrade.applied, true, 'a newer structure file is applied')
+  assert.equal(upgrade.created, 1, 'only the genuinely new table is created')
+  const kept = await db.query<{ pid: string; new_upstream_column: string }>(
+    'SELECT pid, new_upstream_column FROM person')
+  assert.deepEqual(kept.rows, [{ pid: '00042', new_upstream_column: '' }],
+    'imported rows survive a structure upgrade and pick up the new column default')
+  assert.equal((await db.query('SELECT 1 FROM home')).rows.length, 1, 'other imported rows are untouched')
+  await db.exec('DELETE FROM person; DELETE FROM home; DROP TABLE brand_new_file;')
+  console.log('PASS: imported 43-file rows survive re-init and structure upgrades')
+
+  // The app's own import history: created at setup, kept across restarts, clearable on demand.
+  assert.equal((await listImportLog(db)).length, 0, 'a fresh install starts with an empty import log')
+  await db.query(`INSERT INTO import52files_log
+    (file_name, file_path, file_size, started_at, status, progress_percent, row_count, message)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16)`, [
+    'F43_07494_20260819111824.ZIP', 'C:\Desktop\F43_07494_20260819111824.ZIP', 180421, '2026-09-01 08:00', 'complete', 100, 48213, '',
+    'F43_BAD.zip', 'C:\Desktop\F43_BAD.zip', 900, '2026-09-08 09:30', 'failed', 0, 0, 'ไม่ใช่ 52 แฟ้มมาตรฐาน',
+  ])
+  const log = await listImportLog(db)
+  assert.equal(log.length, 2, 'the log lists every run')
+  assert.deepEqual(log.map((row) => row.fileName), ['F43_BAD.zip', 'F43_07494_20260819111824.ZIP'],
+    'runs come back sorted by import date, newest first')
+  assert.equal(log[1].rowCount, 48213)
+  assert.equal(log[1].finishedAt, null)
+
+  const untouched = await createAppTables(db)
+  assert.equal(untouched.applied, false, 'the app schema is only built once')
+  await db.close()
+  db = await openDatabase(join(directory, 'db'))
+  assert.equal((await listImportLog(db)).length, 2, 'the import log survives a restart')
+  console.log('PASS: import52files_log accumulates runs newest first and survives restarts')
 } finally {
   if (db && !db.closed) await db.close()
   await rm(directory, { recursive: true, force: true })
