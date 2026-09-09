@@ -26,6 +26,8 @@ const page = (version: string) => `data:text/html;charset=utf-8,${encodeURICompo
     background: linear-gradient(140deg, #ffffff 0%, #f3eef9 55%, #e7dcf7 100%);
     border: 1px solid #ddd2eb; border-radius: 10px; user-select: none; cursor: default; }
   h1 { margin: 0; font-size: 30px; letter-spacing: 1px; color: #7843b5; font-weight: 600; }
+  /* The version rides on the title line, small enough not to compete with the name. */
+  h1 span { margin-left: 10px; font-size: 13px; font-weight: 500; letter-spacing: 0; color: #6d607d; }
   p { margin: 0; font-size: 12px; color: #6d607d; }
   #status { min-height: 16px; font-size: 12px; color: #473655; }
   .bar { height: 5px; border-radius: 4px; background: #e2d5f4; overflow: hidden; }
@@ -33,8 +35,8 @@ const page = (version: string) => `data:text/html;charset=utf-8,${encodeURICompo
     animation: slide 1.1s ease-in-out infinite; }
   @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
 </style></head><body>
-  <h1>PLK GAP</h1>
-  <p>ระบบตรวจคุณภาพข้อมูล 43 แฟ้ม &middot; version ${version}</p>
+  <h1>PLK GAP <span>version ${version}</span></h1>
+  <p>ระบบตรวจคุณภาพข้อมูล 43 แฟ้ม</p>
   <div class="bar"><span></span></div>
   <p id="status">กำลังเริ่มต้น...</p>
 </body></html>`)}`

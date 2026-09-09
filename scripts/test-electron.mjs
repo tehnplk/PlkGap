@@ -68,7 +68,8 @@ try {
   // The splash comes up first while the database opens, so the first window is not the app.
   const splash = await application.firstWindow({ timeout: 60000 })
   assert.ok(splash.url().startsWith('data:'), `the splash shows first, got ${splash.url()}`)
-  await expect(splash.locator('h1')).toHaveText('PLK GAP')
+  // Name and version share the title line, the same way the app's own title bar reads.
+  await expect(splash.locator('h1')).toHaveText(/^PLK GAP version \d+\.\d+\.\d+$/)
   await expect(splash.locator('#status')).not.toBeEmpty()
   await mkdir('artifacts', { recursive: true })
   await splash.screenshot({ path: 'artifacts/plkgap-splash.png' })
