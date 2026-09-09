@@ -6,8 +6,8 @@ import { LoginRequiredDialog } from './LoginRequiredDialog'
 import { useRememberedAccount } from './useRememberedAccount'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
-import { Import52Files } from './pages/files43/Import52Files'
-import { DataCount } from './pages/files43/DataCount'
+import { Import52FilesPage } from './pages/files43/Import52FilesPage'
+import { DataCountPage } from './pages/files43/DataCountPage'
 import { StructureCheckPage } from './pages/files43/StructureCheckPage'
 import { ObservationCheckPage } from './pages/files43/ObservationCheckPage'
 import { IndicatorTemplatePage } from './pages/analytics/IndicatorTemplatePage'
@@ -66,8 +66,8 @@ const icons: Record<Kind, IconName> = {
 }
 // Basename of the page component that renders each Kind — shown after the title in window chrome.
 const sources: Record<Kind, string> = {
-  import: 'Import52Files',
-  'data-count': 'DataCount',
+  import: 'Import52FilesPage',
+  'data-count': 'DataCountPage',
   'structure-check': 'StructureCheckPage',
   'observation-check': 'ObservationCheckPage',
   'kpi-template': 'IndicatorTemplatePage',
@@ -232,8 +232,8 @@ export function App() {
       {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
         <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
         <div className={flushPages.includes(item.id) ? 'window-content flush' : 'window-content'}>
-          {item.id === 'import' && <Import52Files />}
-          {item.id === 'data-count' && <DataCount />}
+          {item.id === 'import' && <Import52FilesPage />}
+          {item.id === 'data-count' && <DataCountPage />}
           {item.id === 'structure-check' && <StructureCheckPage />}
           {item.id === 'observation-check' && <ObservationCheckPage />}
           {item.id === 'kpi-template' && <IndicatorTemplatePage />}

@@ -15,6 +15,9 @@
 ## MDI: `src/renderer/src/pages/` และ `App.tsx`
 
 - ไม่มี router: หนึ่งไฟล์ page ต่อหนึ่ง `Kind` เป็นเนื้อหาภายในหน้าต่างย่อย
+- **ทุกไฟล์ใน `pages/` ต้องลงท้ายด้วย `Page.tsx`** และ export component ชื่อเดียวกับไฟล์ เช่น `DataCountPage.tsx` → `export function DataCountPage()`; ไฟล์ที่ไม่ใช่หน้าจอห้ามอยู่ในโฟลเดอร์นี้
+- **ทุกหน้าต้องแสดงชื่อเป็น `{ชื่อหน้า} - {ชื่อไฟล์}`** บนหัวหน้าต่าง ตามที่ `windowTitle(id)` ประกอบให้ (ดูหัวข้อถัดไป) — ผู้ใช้จึงบอกได้เสมอว่าหน้าที่เห็นมาจากไฟล์ไหน
+- สองข้อบนถูกตรวจแบบ static ที่หัว `scripts/test-electron.mjs` ก่อนเปิดแอป: ไล่ทุกไฟล์ใน `pages/` เทียบชื่อ, เทียบกับ `sources` ใน App และตรวจว่าสูตรของ `windowTitle` ยังเป็นรูปแบบเดิม — เปลี่ยนชื่อไฟล์แล้วลืมแก้ `sources` เทสต์ตกทันที
 - `App.tsx` ดูแลเฉพาะ shell, เมนู และจัดการหน้าต่าง (open/close/focus/move/resize/arrange) ห้ามใส่ business logic, data processing หรือ state เฉพาะหน้า
 - แต่ละ page โหลดข้อมูลและจัดการ logic/state ของตัวเอง (sort/filter/transform/pagination); แผนที่ PostGIS ใช้ข้อยกเว้นในหัวข้อ Leaflet
 - `.window-content` ใน App คุม padding/scroll/กรอบ/พื้นหลัง; page ปกติ return fragment ห้ามสร้าง chrome เอง ยกเว้น element ที่เนื้อหาต้องมีขนาด เช่น `.map-canvas`
@@ -32,9 +35,9 @@
 
 ### เพิ่มหน้า
 
-1. สร้าง `pages/<group>/XxxPage.tsx`
+1. สร้าง `pages/<group>/XxxPage.tsx` (ชื่อไฟล์ลงท้าย `Page` เสมอ) แล้ว `export function XxxPage()`
 2. เพิ่ม `Kind` ใน App
-3. เพิ่ม `titles`, `icons`, `sources` ใน App (`sources` ตรง basename); เพิ่ม path ใน `Icon.tsx` ถ้าจำเป็น
+3. เพิ่ม `titles`, `icons`, `sources` ใน App (`sources` ตรง basename ไม่รวมนามสกุล); เพิ่ม path ใน `Icon.tsx` ถ้าจำเป็น
 4. เพิ่ม conditional render ใน `.window-content` และเงื่อนไข `flush` ถ้าต้องเต็มกรอบ
 5. เพิ่ม Kind ใน `groups` ถ้าต้องแสดง sidebar; เพิ่มคำสั่ง File/เกี่ยวกับเองถ้าต้องการ ส่วนเมนู Window มาจากหน้าต่างที่เปิดอยู่โดยอัตโนมัติ
 
@@ -118,6 +121,13 @@ Embedded PostgreSQL (WASM) ใน Electron; ไม่มี server/พอร์�
 2. `c_files_schema.description` เฉพาะฟิลด์ที่แหล่งแรกไม่ครอบคลุม — **รายการที่เผยแพร่ชนะเสมอ** คำอธิบายในพจนานุกรมห้ามทับ
 
 `scripts/generate-structure-codes.mjs` รวมสองแหล่งเป็น `structure-codes.json` แล้ว `loadStructureCodeTables()` seed ภายใต้ component `structure_codes` **ก่อน** สร้าง api view
+
+**ขอบเขตการตรวจ: ตัดสินทีละแถวใน zip เดียว** ต่างจากข้อสังเกตที่ค้นข้าม zip ได้
+
+- ทุกกฎใน `ruleTests()` ต้องตัดสินจากค่าในแถวนั้นแถวเดียว **ห้ามข้าม zip ห้ามข้าม HOSPCODE** และห้าม join/subquery ไปหาแถวอื่นในแฟ้ม 43 แฟ้ม แม้จะเป็นหน่วยบริการเดียวกัน — สิ่งเดียวที่กฎอ้างถึงได้นอกแถวคือตาราง `c_*` (รายการรหัสมาตรฐานและพจนานุกรม)
+- `checkImportStructure()` และ `structureFailingRows()` ต้องมี `importedFromZip` เสมอ ทั้งตอนนับและตอน drill-down ตัวเลขที่รายงานจึงมาจาก zip ที่ผู้ใช้กดตรวจเท่านั้น
+- ถ้าต้องการกฎที่เทียบข้ามแถวหรือข้ามแฟ้ม (เช่นคีย์ซ้ำ หรือแฟ้มลูกไม่มีแฟ้มแม่) **ให้ไปเพิ่มเป็นกฎข้อสังเกต** ไม่ใช่กฎโครงสร้าง
+- `scripts/test-database.ts` ตรึงข้อนี้ไว้: ใส่แถวของอีก zip และอีก HOSPCODE ลงแฟ้มเดียวกันแล้วผลตรวจของ zip เดิมต้องไม่ขยับสักตัวเลข
 
 - ทุก entry ใน pull script ต้องระบุ `fields` เป็น `<แฟ้ม>.<คอลัมน์>` และ script จะ throw ถ้าฟิลด์นั้นไม่มีใน `c_files_schema`
 - รายการที่ใช้ร่วมกันหลายฟิลด์ทำเป็น **ตารางเดียว + binding หลายเส้น** (`c_instype`, `c_servplace`, `c_chargeitem`, `c_diagtype`, `c_fptype`, `c_housetype`, `c_person_prename`, `c_person_nation`, `c_person_sex`) ห้ามทำสำเนาตารางต่อฟิลด์

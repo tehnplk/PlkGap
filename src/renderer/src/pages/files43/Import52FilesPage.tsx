@@ -8,7 +8,7 @@ const megabytes = (bytes: number) => (bytes / 1048576).toFixed(2)
 const statusLabel: Record<string, string> = { running: 'กำลังนำเข้า', complete: 'สำเร็จ', failed: 'ล้มเหลว' }
 const statusStyle: Record<string, string> = { running: 'pending', complete: 'passed', failed: 'error' }
 
-export function Import52Files() {
+export function Import52FilesPage() {
   const [path, setPath] = useState('')
   const [percent, setPercent] = useState(0)
   const [progress, setProgress] = useState('ยังไม่ได้เลือกไฟล์')

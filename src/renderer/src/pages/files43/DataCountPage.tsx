@@ -13,7 +13,7 @@ function currentFiscalYear() {
 /** The busiest file, so the page shows something useful the moment it opens. */
 const DEFAULT_FILE = 'service'
 
-export function DataCount() {
+export function DataCountPage() {
   const [table, setTable] = useState(DEFAULT_FILE)
   const [files, setFiles] = useState<string[]>([])
   const [count, setCount] = useState<DataCountResult | null>(null)

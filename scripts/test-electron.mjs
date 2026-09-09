@@ -1,6 +1,6 @@
 import { _electron as electron, expect } from '@playwright/test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile, readFile, access } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, access, readdir } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
 import yazl from 'yazl'
 import { tmpdir } from 'node:os'
@@ -14,6 +14,19 @@ import tablesInUse from '../src/main/reference/tables-in-use.json' with { type: 
 
 const referenceTables = [...reference.tables.filter((table) => tablesInUse.tables.includes(table.name)), ...structureCodes.tables]
 const referenceRows = referenceTables.reduce((sum, table) => sum + table.rows.length, 0)
+
+// Every page follows the same two rules, checked before the app even starts: the file is named
+// <Name>Page.tsx, and App names its window "{ชื่อหน้า} - {basename}" through windowTitle().
+const pageFiles = (await readdir('src/renderer/src/pages', { recursive: true })).filter((name) => name.endsWith('.tsx'))
+assert.ok(pageFiles.length > 10, `pages live in src/renderer/src/pages, found ${pageFiles.length}`)
+const appSource = await readFile('src/renderer/src/App.tsx', 'utf8')
+for (const file of pageFiles) {
+  assert.match(file, /Page\.tsx$/, `${file} must be named <Name>Page.tsx`)
+  const name = file.split(/[\\/]/).at(-1).replace(/\.tsx$/, '')
+  assert.ok(appSource.includes(`'${name}'`), `App must name ${name} in sources, so its window title shows the file`)
+}
+assert.ok(appSource.includes('const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`'),
+  'window titles are composed in one place, as "{ชื่อหน้า} - {ชื่อไฟล์}"')
 // A fresh temp userData is exactly the state of a brand new machine after install.
 const directory = await mkdtemp(join(tmpdir(), 'plkgap-ui-test-'))
 // A stand-in for the Desktop, so the test never reads the real one.
@@ -176,7 +189,7 @@ try {
   await page.screenshot({ path: 'artifacts/plkgap-sidebar-groups.png', fullPage: true })
 
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
-  const importWindow = page.getByRole('region', { name: 'นำเข้าข้อมูล - Import52Files window' })
+  const importWindow = page.getByRole('region', { name: 'นำเข้าข้อมูล - Import52FilesPage window' })
   await expect(importWindow).toBeVisible()
   await expect(importWindow).toHaveClass(/maximized/)
   assert.deepEqual(await page.locator('.workspace').boundingBox(), workspaceBounds, 'Opening a child does not shrink the workspace')
@@ -188,7 +201,7 @@ try {
   assert.deepEqual(await importWindow.locator('thead th').allInnerTexts(),
     ['ลำดับ', 'วัน-เวลานำเข้า', 'ชื่อไฟล์', 'File Size (MB)', 'แถว', 'สถานะ'])
   // Child window titles carry the page component that renders them.
-  await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - Import52Files')
+  await expect(importWindow.locator('.window-titlebar > span')).toHaveText('นำเข้าข้อมูล - Import52FilesPage')
 
   // The [...] picker is a native dialog, so stub it the same way the exit dialog is stubbed below.
   await expect(importWindow.getByRole('button', { name: 'นำเข้า', exact: true })).toBeDisabled()
@@ -244,7 +257,7 @@ try {
 
   // ปริมาณข้อมูล: a fiscal year runs October to September, so the grid is 12 months plus a total.
   await navigation.getByRole('button', { name: 'ปริมาณข้อมูล', exact: true }).click()
-  const dataCount = page.getByRole('region', { name: 'ปริมาณข้อมูล - DataCount window' })
+  const dataCount = page.getByRole('region', { name: 'ปริมาณข้อมูล - DataCountPage window' })
   await expect(dataCount).toBeVisible()
   // It opens on service, so there is something on screen without touching the picker.
   await expect(dataCount.getByLabel('เลือกแฟ้ม')).toHaveValue('service')
@@ -299,7 +312,7 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect.poll(async () => (await yearHeader.boundingBox()).width).toBeGreaterThan(keyboardWidth + 10)
   await page.screenshot({ path: 'artifacts/plkgap-data-count.png', fullPage: true })
-  await dataCount.getByRole('button', { name: 'Close ปริมาณข้อมูล - DataCount' }).click()
+  await dataCount.getByRole('button', { name: 'Close ปริมาณข้อมูล - DataCountPage' }).click()
   await expect(dataCount).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
@@ -319,7 +332,7 @@ try {
   await navigation.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
   await expect(importWindow).toHaveCount(1)
 
-  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52Files' }).click()
+  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52FilesPage' }).click()
   await expect(importWindow).not.toHaveClass(/maximized/)
   // Drags are pointer-capture based, so give each press a beat before moving and poll the result:
   // a React re-render between down and move used to make this flap.
@@ -339,12 +352,12 @@ try {
   const handle = await importWindow.locator('.resize-handle').boundingBox()
   await drag({ x: handle.x + 12, y: handle.y + 12 }, { x: handle.x + 72, y: handle.y + 12 })
   await expect.poll(async () => (await importWindow.boundingBox()).width).toBeGreaterThan(afterMove.width + 40)
-  await importWindow.getByRole('button', { name: 'Maximize นำเข้าข้อมูล - Import52Files' }).click()
+  await importWindow.getByRole('button', { name: 'Maximize นำเข้าข้อมูล - Import52FilesPage' }).click()
   await expect(importWindow).toHaveClass(/maximized/)
-  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52Files' }).click()
-  await importWindow.getByRole('button', { name: 'Minimize นำเข้าข้อมูล - Import52Files' }).click()
+  await importWindow.getByRole('button', { name: 'Restore นำเข้าข้อมูล - Import52FilesPage' }).click()
+  await importWindow.getByRole('button', { name: 'Minimize นำเข้าข้อมูล - Import52FilesPage' }).click()
   await expect(importWindow).toHaveCount(0)
-  await page.locator('.window-dock').getByRole('button', { name: 'นำเข้าข้อมูล - Import52Files', exact: true }).click()
+  await page.locator('.window-dock').getByRole('button', { name: 'นำเข้าข้อมูล - Import52FilesPage', exact: true }).click()
   await expect(importWindow).toBeVisible()
 
   await navigation.getByRole('button', { name: 'ไข้เลือดออก', exact: true }).click()
@@ -671,14 +684,14 @@ try {
       await page.evaluate((path) => window.api.runImport(path), validZip)
       importedCount++
     }
-    for (const [title, source] of [['นำเข้าข้อมูล', 'Import52Files'], ['คุณภาพตามโครงสร้าง', 'StructureCheckPage'], ['คุณภาพตามข้อสังเกต', 'ObservationCheckPage']]) {
+    for (const [title, source] of [['นำเข้าข้อมูล', 'Import52FilesPage'], ['คุณภาพตามโครงสร้าง', 'StructureCheckPage'], ['คุณภาพตามข้อสังเกต', 'ObservationCheckPage']]) {
       const region = page.getByRole('region', { name: `${title} - ${source} window` })
       await navigation.getByRole('button', { name: title, exact: true }).click()
       await region.getByRole('button', { name: `Close ${title} - ${source}`, exact: true }).click()
       await navigation.getByRole('button', { name: title, exact: true }).click()
       const viewport = region.locator('.data-grid-scroll')
       await expect(viewport.locator('tbody tr')).toHaveCount(count)
-      const visibleRows = source === 'Import52Files' ? 15 : 5
+      const visibleRows = source === 'Import52FilesPage' ? 15 : 5
       await expect.poll(() => viewport.evaluate((element) => element.scrollHeight > element.clientHeight + 1)).toBe(count > visibleRows)
       if (count > visibleRows) {
         const headerTop = await viewport.locator('thead th').first().evaluate((element) => element.getBoundingClientRect().top)

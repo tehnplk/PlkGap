@@ -685,6 +685,17 @@ try {
   assert.deepEqual(shortUnit.rows.map((row) => row[shortUnit.columns.indexOf('seq')]).sort(), ['U2', 'U3'],
     'drill-down and summary share the same unit-code predicate')
 
+  // Structure rules judge one row at a time inside one zip: rows from another zip, or from another
+  // HOSPCODE, are outside the check and can never change a count.
+  const otherRun = await startImportRun(db, { name: 'structure-other.zip', path: 'structure-other.zip', size: 1 })
+  await insertStandardRows(db, otherRun, 'service', ['HOSPCODE', 'SEQ', 'DATE_SERV', 'MAIN'], [
+    ['0747A', 'X1', '20260909', '074A6'],
+    ['99999', 'X2', '20260909', ''],
+  ])
+  const isolated = await checkImportStructure(db, unitZip)
+  assert.deepEqual(isolated.findings, unit.findings, 'another zip and another HOSPCODE stay out of the count')
+  assert.deepEqual([isolated.rows, isolated.rules], [unit.rows, unit.rules], 'the checked row count is the zip alone')
+
   // A finding names the list its field is judged by, so the page can show what is allowed.
   const fpFinding = codeCheck.findings.find((finding) => finding.tableName === 'women' && finding.columnName === 'fptype')
   assert.equal(fpFinding?.reference, 'c_fptype', 'a finding carries the shared list it was judged against')
