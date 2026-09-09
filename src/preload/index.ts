@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
+  listMessageVillages: () => ipcRenderer.invoke('messaging:villages'),
   processIndicators: (period) => ipcRenderer.invoke('indicators:process', period),
   saveIndicatorWorkbook: (period, bytes) => ipcRenderer.invoke('indicators:save-workbook', period, bytes),
   gatewayState: () => ipcRenderer.invoke('gateway:state'),

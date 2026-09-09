@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { createSso } from './sso'
+import { listMessageVillages } from './sql/messaging'
 import { processIndicators } from './database'
 import { createSsoStore } from './sso-store'
 import ssoConfig from './sso-config.json'
@@ -222,6 +223,10 @@ if (!app.requestSingleInstanceLock()) {
       authorizedWindow(event)
       return processIndicators(db!, String(period ?? ''))
     })
+    ipcMain.handle('messaging:villages', (event) => {
+      authorizedWindow(event)
+      return listMessageVillages(db!)
+    })
     ipcMain.handle('indicators:save-workbook', async (event, period: unknown, bytes: unknown) => {
       const target = authorizedWindow(event)
       if (typeof period !== 'string' || !/^25\d{2}-Q[1-4]$/.test(period)
@@ -350,6 +355,7 @@ if (!app.requestSingleInstanceLock()) {
     if (closing) return
     closing = true
     ipcMain.removeHandler('indicators:process')
+    ipcMain.removeHandler('messaging:villages')
     ipcMain.removeHandler('indicators:save-workbook')
     ipcMain.removeHandler('database:status')
     ipcMain.removeHandler('hospital:find')
