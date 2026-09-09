@@ -159,7 +159,18 @@ export interface BoundaryCollection {
   features: { type: 'Feature'; properties: { name: string; code: string }; geometry: unknown }[]
 }
 
+export interface UpdateState {
+  status: 'disabled' | 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
+  version?: string
+  percent?: number
+  message?: string
+}
+
 export interface AppApi {
+  updateState: () => Promise<UpdateState>
+  checkForUpdates: () => Promise<UpdateState>
+  installUpdate: () => Promise<void>
+  onUpdateState: (callback: (state: UpdateState) => void) => () => void
   databaseStatus: () => Promise<DatabaseStatus>
   findHospital: (hospcode: string) => Promise<Hospital | null>
   /** Opens a native file picker limited to .zip and returns the chosen path, or null if cancelled. */

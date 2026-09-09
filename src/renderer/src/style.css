@@ -177,3 +177,7 @@ svg { flex-shrink: 0; }
 .status-warning { background: #fef5e7; color: #b25e00; }
 .status-error { background: #fce8e8; color: #a83030; }
 .status-pending { background: #f3eef9; color: #746582; }
+.update-control { flex-shrink: 0; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 10px; font-size: 11px; border-radius: 4px; app-region: no-drag; -webkit-app-region: no-drag; }
+.update-control:hover:not(:disabled) { background: #e5d5f5; }
+.update-control:disabled { opacity: .6; }
+.update-control.update-ready { background: #e5f1eb; color: #21654b; }

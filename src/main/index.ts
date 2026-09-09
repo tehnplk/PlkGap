@@ -1,4 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { autoUpdater } from 'electron-updater'
+import { createUpdater } from './updater'
 import { basename, join } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { startApiServer } from './server'
@@ -13,6 +15,8 @@ let api: Awaited<ReturnType<typeof startApiServer>> | undefined
 let closing = false
 let confirmedExit = false
 let confirming = false
+let activeImports = 0
+let updater: ReturnType<typeof createUpdater> | undefined
 const testData = process.env.PLKGAP_TEST_DATA_DIR
 if (testData) app.setPath('userData', testData)
 
@@ -86,6 +90,46 @@ if (!app.requestSingleInstanceLock()) {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Unauthorized sender')
       return window
     }
+    updater = createUpdater(autoUpdater, app.isPackaged && process.platform === 'win32' && !testData, (state) => {
+      if (window && !window.webContents.isDestroyed()) window.webContents.send('update:state', state)
+      // An installer launch failure may happen after shutdown. Reopen the app instead
+      // of leaving its renderer connected to a database that has already closed.
+      if (closing && db?.closed && state.message && (state.status === 'error' || state.status === 'ready')) {
+        void dialog.showMessageBox({ type: 'error', message: 'ติดตั้งอัปเดตไม่สำเร็จ', detail: 'ระบบจะเปิดแอปใหม่เพื่อให้ใช้งานต่อได้' })
+          .finally(() => { app.relaunch(); app.exit() })
+      }
+    })
+    ipcMain.handle('update:state', (event) => { authorizedWindow(event); return updater!.getState() })
+    ipcMain.handle('update:check', (event) => { authorizedWindow(event); return updater!.check() })
+    ipcMain.handle('update:install', async (event) => {
+      const target = authorizedWindow(event)
+      await updater!.install(async () => {
+        if (closing || confirming || activeImports > 0) {
+          await dialog.showMessageBox(target, { type: 'info', message: 'กรุณารอให้งานปัจจุบันเสร็จก่อนเริ่มใหม่เพื่ออัปเดต' })
+          return false
+        }
+        confirming = true
+        try {
+          const { response } = await dialog.showMessageBox(target, {
+            type: 'question', title: 'อัปเดต PLK GAP', message: 'เริ่มใหม่เพื่อติดตั้งอัปเดต?',
+            detail: 'ระบบจะปิดฐานข้อมูลก่อนติดตั้ง ข้อมูลที่นำเข้าจะยังอยู่ครบ',
+            buttons: ['เริ่มใหม่เพื่ออัปเดต', 'ภายหลัง'], defaultId: 0, cancelId: 1, noLink: true,
+          })
+          if (response !== 0 || closing || activeImports > 0) return false
+          closing = true
+          await api?.close()
+          await db!.close()
+          confirmedExit = true
+          updater!.stop()
+          return true
+        } catch (error) {
+          closing = false
+          // If API shutdown succeeded but the database could not close, restore access.
+          if (db && !db.closed) api = await startApiServer(db)
+          throw error
+        } finally { confirming = false }
+      })
+    })
     ipcMain.handle('window:minimize', (event) => authorizedWindow(event).minimize())
     ipcMain.handle('window:toggle-maximize', (event) => {
       const target = authorizedWindow(event)
@@ -174,6 +218,9 @@ if (!app.requestSingleInstanceLock()) {
     })
     ipcMain.handle('import:run', async (event, path: unknown) => {
       const target = authorizedWindow(event)
+      if (closing) throw new Error('Application is closing')
+      activeImports += 1
+      try {
       const file = String(path ?? '')
       const standard = await listStandardFiles(db!)
       const check = await checkImportZip(file, standard)
@@ -202,8 +249,10 @@ if (!app.requestSingleInstanceLock()) {
       }
       await finishImportRun(db!, runId, { status: 'complete', rowCount, message: '' })
       return { runId, files, rowCount }
+      } finally { activeImports -= 1 }
     })
     createWindow()
+    updater.start()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -215,6 +264,7 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== 'darwin') app.quit()
   })
   app.on('before-quit', (event) => {
+    updater?.stop()
     if (!db || db.closed) return
     event.preventDefault()
     if (closing) return

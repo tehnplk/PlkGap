@@ -2,6 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
+  updateState: () => ipcRenderer.invoke('update:state'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateState: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state)
+    ipcRenderer.on('update:state', listener)
+    return () => ipcRenderer.removeListener('update:state', listener)
+  },
   databaseStatus: () => ipcRenderer.invoke('database:status'),
   findHospital: (hospcode) => ipcRenderer.invoke('hospital:find', hospcode),
   chooseImportFile: () => ipcRenderer.invoke('import:choose-file'),

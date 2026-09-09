@@ -4,11 +4,14 @@
   "description": "Electron React Vite desktop app with embedded PostGIS",
   "main": "out/main/index.js",
   "scripts": {
-    "test": "tsx scripts/test-database.ts && node scripts/test-electron.mjs",
+    "test": "npm run test:updater && tsx scripts/test-database.ts && node scripts/test-electron.mjs",
     "dev": "node scripts/run-electron-vite.cjs dev",
     "start": "node scripts/run-electron-vite.cjs preview",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && electron-vite build"
+    "build": "npm run typecheck && electron-vite build",
+    "test:updater": "tsx scripts/test-updater.ts",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "release:win": "npm run build && electron-builder --win nsis --x64 --publish always"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +20,7 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@electric-sql/pglite-postgis": "^0.2.8",
+    "electron-updater": "^6.8.9",
     "leaflet": "^1.9.4",
     "leaflet.markercluster": "^1.5.3",
     "react": "^19.2.8",
@@ -34,11 +38,50 @@
     "@types/yazl": "^3.3.1",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
     "yazl": "^3.3.1"
   },
-  "private": true
+  "private": true,
+  "build": {
+    "appId": "th.go.plkhealth.plkgap",
+    "productName": "plkgap",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.wasm",
+      "**/*.data"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "tehnplk",
+        "repo": "PlkGap",
+        "releaseType": "draft"
+      }
+    ]
+  }
 }
