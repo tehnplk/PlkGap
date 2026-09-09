@@ -13,21 +13,17 @@ export function IndicatorTemplatePage() {
   const [onlyBelow, setOnlyBelow] = useState(false)
   const [selected, setSelected] = useState<IndicatorResult | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
-  const request = useRef(0)
-  useEffect(() => () => { request.current++ }, [])
   useEffect(() => {
     if (selected) dialog.current?.showModal()
     else dialog.current?.close()
   }, [selected])
   async function process() {
-    const id = ++request.current
     setBusy(true); setError(''); setReport(null); setSelected(null)
     try {
-      const next = await window.api.processIndicators(period)
-      if (id === request.current) setReport(next)
+      setReport(await window.api.processIndicators(period))
     } catch (reason) {
-      if (id === request.current) setError(reason instanceof Error ? reason.message : String(reason))
-    } finally { if (id === request.current) setBusy(false) }
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally { setBusy(false) }
   }
   async function exportExcel() {
     if (!report) return
@@ -42,8 +38,8 @@ export function IndicatorTemplatePage() {
         'สถานะ': item.unavailable ?? (item.value === null ? 'ไม่มีข้อมูลในงวด' : item.value >= item.target ? 'ผ่าน' : 'ต่ำกว่าเป้า'),
         'สูตร': item.rule,
       }))), 'ตัวชี้วัด')
-      const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
-      await window.api.saveIndicatorWorkbook(report.period, Array.from(bytes))
+      await window.api.saveIndicatorWorkbook(report.period,
+        Array.from(new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))))
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
   }
   const all = report?.indicators ?? []
@@ -52,12 +48,11 @@ export function IndicatorTemplatePage() {
   const passed = evaluated.filter(item => item.value! >= item.target).length
   return <>
     <div className="content-heading"><div><p className="eyebrow">ระบบวิเคราะห์ข้อมูล</p><h2>เทมเพลตตัวชี้วัด</h2></div>
-      <span className="badge">ผ่านเกณฑ์ {passed}/{evaluated.length}</span></div>
-    <p>คำนวณจากข้อมูลนำเข้าทุก ZIP เฉพาะไตรมาสที่เลือก ตามสูตรด้านล่าง เป้าหมายเป็นค่าของเทมเพลต ไม่ใช่ผลรับรองตามนิยาม HDC รายปี</p>
+      {report && <span className="badge">ผ่านเกณฑ์ {passed}/{evaluated.length}</span>}</div>
     <div className="toolbar-row">
       <label htmlFor="kpi-period">งวดข้อมูล</label>
       <select id="kpi-period" className="mock-select" value={period} disabled={busy} onChange={event => {
-        request.current++; setPeriod(event.target.value); setReport(null); setSelected(null); setError('')
+        setPeriod(event.target.value); setReport(null); setSelected(null); setError('')
       }}>
         {Array.from({ length: 11 }, (_, i) => fiscalYear - i).flatMap(year => [1, 2, 3, 4].map(q =>
           <option key={`${year}-Q${q}`} value={`${year}-Q${q}`}>ปีงบ {year} ไตรมาส {q}</option>))}
@@ -81,7 +76,7 @@ export function IndicatorTemplatePage() {
           <td data-sort-value={item.gapCount}><button type="button" className="mock-button" disabled={!item.gapCount} onClick={() => setSelected(item)}>แสดงส่วนขาด ({item.gapCount.toLocaleString()})</button></td>
         </tr>)}</tbody>
       </SortableTable>{!rows.length && <p>ไม่มีตัวชี้วัดที่ต่ำกว่าเป้า</p>}</div>
-      <details><summary>สูตรคำนวณและข้อจำกัด</summary><p>A / B × 100; B = 0 ไม่คำนวณร้อยละ ข้อมูลอาจไม่ครบและบุคคลเดียวกันต่างหน่วยบริการนับแยกกัน ไม่อนุมานผลทางคลินิกจากข้อมูลที่ขาด</p>
+      <details><summary>สูตรคำนวณและข้อจำกัด</summary>
         {all.map(item => <p key={item.code}><strong>{item.code}</strong> — {item.rule}{item.unavailable && <> · {item.unavailable}</>}</p>)}
       </details>
     </>}

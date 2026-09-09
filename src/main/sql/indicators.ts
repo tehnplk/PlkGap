@@ -16,13 +16,13 @@ export async function processIndicators(db: PGlite, period: string): Promise<Ind
     { code: 'KPI-01', name: 'ร้อยละหญิงตั้งครรภ์ฝากครรภ์ครั้งแรกก่อน 12 สัปดาห์', target: 75, owner: 'กลุ่มงานส่งเสริมสุขภาพ',
       rule: 'B = ครรภ์ที่มี ANC ครั้งแรกที่พบในข้อมูลนำเข้าอยู่ในไตรมาสนี้ แยก HOSPCODE/PID/GRAVIDA; A = GA ครั้งแรก 1–11 สัปดาห์ ค้นประวัติก่อนงวดทุก ZIP; GA ว่าง/ผิดรูปแบบเป็นส่วนขาดข้อมูล ไม่ใช้ ANCNO แทนครั้งแรก',
       sql: `WITH first_anc AS (
-        SELECT DISTINCT ON (hospcode, pid, gravida) hospcode, pid, gravida, date_serv, ${numeric('ga')} AS ga
-        FROM anc WHERE hospcode <> '' AND pid <> '' AND gravida ~ '^[0-9]{1,2}$' AND ${numeric('gravida')} > 0
+        SELECT DISTINCT ON (hospcode, pid, gravida::int) hospcode, pid, gravida::int AS gravida, date_serv, ${numeric('ga')} AS ga
+        FROM anc WHERE hospcode <> '' AND pid <> '' AND gravida ~ '^0*[1-9][0-9]?$'
           AND ${validObservationDate('date_serv')} AND date_serv < $2
-        ORDER BY hospcode, pid, gravida, date_serv, d_update DESC
+        ORDER BY hospcode, pid, gravida::int, date_serv
       ), cohort AS (
         SELECT hospcode, pid, COALESCE(ga >= 1 AND ga < 12, false) AS passed,
-          'ครรภ์ที่ ' || gravida || ': ' || CASE WHEN ga IS NULL OR ga <= 0 THEN 'ไม่มี GA ที่ใช้ได้'
+          'ครรภ์ที่ ' || gravida::text || ': ' || CASE WHEN ga IS NULL OR ga <= 0 THEN 'ไม่มี GA ที่ใช้ได้'
           ELSE 'GA ' || ga::text || ' สัปดาห์' END AS detail
         FROM first_anc WHERE date_serv >= $1
       )` },
@@ -60,7 +60,7 @@ export async function processIndicators(db: PGlite, period: string): Promise<Ind
         SELECT DISTINCT ON (hospcode, pid) hospcode, pid, ${definition.values}
         FROM ${definition.measurement} WHERE ${validObservationDate('date_serv')}
           AND date_serv >= $1 AND date_serv < $2 ${definition.condition}
-        ORDER BY hospcode, pid, date_serv DESC, d_update DESC
+        ORDER BY hospcode, pid, date_serv DESC
       ), cohort AS (
         SELECT r.hospcode, r.pid, COALESCE(${definition.passed}, false) AS passed, ${definition.detail} AS detail
         FROM registered r LEFT JOIN latest m ON m.hospcode = r.hospcode AND m.pid = r.pid

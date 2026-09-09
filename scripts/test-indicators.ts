@@ -53,7 +53,13 @@ async function main() {
     const capped = (await processIndicators(db, '2569-Q4')).indicators[2]
     assert.equal(capped.denominator, 508); assert.equal(capped.gaps.length, 500); assert.equal(capped.gapCount, 507)
     await db.exec("DELETE FROM chronic WHERE hospcode = '33333'")
-    console.log('PASS: empty data, quarter boundaries, first pregnancy visit, latest measurements, invalid values, facility isolation, deduplicated cohorts, gaps and cap')
+    // '01' and '1' are the same pregnancy: one cohort row, not two.
+    await db.exec(`INSERT INTO anc(hospcode,pid,gravida,date_serv,ga) VALUES
+      ('11111','pad','01','20260701','10'),('11111','pad','1','20260801','bad')`)
+    const padded = (await processIndicators(db, '2569-Q4')).indicators[0]
+    assert.equal(padded.denominator, 4); assert.equal(padded.numerator, 2)
+    await db.exec("DELETE FROM anc WHERE pid = 'pad'")
+    console.log('PASS: empty data, quarter boundaries, first pregnancy visit, padded gravida, latest measurements, invalid values, facility isolation, deduplicated cohorts, gaps and cap')
   } finally {
     await db.close()
     if (!process.env.PLKGAP_INDICATOR_FIXTURE_DIR) await rm(directory, { recursive: true, force: true })
