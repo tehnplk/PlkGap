@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SortableTable } from '../../SortableTable'
 import { Icon } from '../../Icon'
 import type { IndicatorReport, IndicatorResult } from '../../../../shared/api'
@@ -14,8 +14,8 @@ export function IndicatorTemplatePage() {
   const [selected, setSelected] = useState<IndicatorResult | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
-    if (selected) dialog.current?.showModal()
-    else dialog.current?.close()
+    if (selected && !dialog.current?.open) dialog.current?.showModal()
+    else if (!selected && dialog.current?.open) dialog.current?.close()
   }, [selected])
   async function process() {
     setBusy(true); setError(''); setReport(null); setSelected(null)
@@ -38,8 +38,8 @@ export function IndicatorTemplatePage() {
         'สถานะ': item.unavailable ?? (item.value === null ? 'ไม่มีข้อมูลในงวด' : item.value >= item.target ? 'ผ่าน' : 'ต่ำกว่าเป้า'),
         'สูตร': item.rule,
       }))), 'ตัวชี้วัด')
-      await window.api.saveIndicatorWorkbook(report.period,
-        Array.from(new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))))
+      const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
+      await window.api.saveIndicatorWorkbook(report.period, bytes)
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
   }
   const all = report?.indicators ?? []
@@ -66,13 +66,15 @@ export function IndicatorTemplatePage() {
     {report && <>
       <p>งวด {report.period} · ประมวลผล {new Date(report.processedAt).toLocaleString('th-TH')}</p>
       <div className="table-wrapper"><SortableTable className="data-table" aria-label="ตารางตัวชี้วัด">
-        <thead><tr><th>รหัส</th><th>ชื่อตัวชี้วัด</th><th>ผู้รับผิดชอบ</th><th>เป้าหมาย</th><th>A</th><th>B</th><th>ผลงาน</th><th>ความคืบหน้า</th><th>ส่วนขาด</th></tr></thead>
+        <thead><tr><th>รหัส</th><th>ชื่อตัวชี้วัด</th><th>ผู้รับผิดชอบ</th><th>เป้าหมาย</th><th>A</th><th>B</th><th>ผลงาน</th><th>ส่วนขาด</th></tr></thead>
         <tbody>{rows.map(item => <tr key={item.code}>
           <td className="code-cell"><code>{item.code}</code></td><td className="name-cell"><strong>{item.name}</strong></td><td>{item.owner}</td>
           <td data-sort-value={item.target}>{item.target}%</td><td data-sort-value={item.numerator}>{item.unavailable ? '—' : item.numerator.toLocaleString()}</td>
           <td data-sort-value={item.denominator}>{item.unavailable ? '—' : item.denominator.toLocaleString()}</td>
-          <td data-sort-value={item.value ?? -1}>{item.value === null ? item.unavailable ? 'ยังคำนวณไม่ได้' : 'ไม่มีข้อมูลในงวด' : `${item.value.toFixed(1)}%`}</td>
-          <td data-sort-value={item.value ?? -1} style={{ minWidth: 140 }}>{item.value !== null && <div className="progress"><span className={item.value >= item.target ? '' : 'below'} style={{ width: `${Math.min(100, item.value / item.target * 100)}%` }} /></div>}</td>
+          <td data-sort-value={item.value ?? -1} style={{ minWidth: 140 }}>{item.value === null ? item.unavailable ? 'ยังคำนวณไม่ได้' : 'ไม่มีข้อมูลในงวด' : <>
+            <div>{item.value.toFixed(1)}%</div>
+            <div className="progress" style={{ marginTop: 4 }}><span className={item.value >= item.target ? '' : 'below'} style={{ width: `${Math.min(100, item.value / item.target * 100)}%` }} /></div>
+          </>}</td>
           <td data-sort-value={item.gapCount}><button type="button" className="mock-button" disabled={!item.gapCount} onClick={() => setSelected(item)}>แสดงส่วนขาด ({item.gapCount.toLocaleString()})</button></td>
         </tr>)}</tbody>
       </SortableTable>{!rows.length && <p>ไม่มีตัวชี้วัดที่ต่ำกว่าเป้า</p>}</div>

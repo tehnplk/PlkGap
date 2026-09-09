@@ -222,7 +222,7 @@ export interface IndicatorReport {
 export interface AppApi {
   listMessageVillages: () => Promise<{ id: string; label: string }[]>
   processIndicators: (period: string) => Promise<IndicatorReport>
-  saveIndicatorWorkbook: (period: string, bytes: number[]) => Promise<boolean>
+  saveIndicatorWorkbook: (period: string, bytes: Uint8Array | number[]) => Promise<boolean>
   gatewayState: () => Promise<GatewayState>
   setGatewayEnabled: (enabled: boolean) => Promise<GatewayState>
   ssoState: () => Promise<SsoState>

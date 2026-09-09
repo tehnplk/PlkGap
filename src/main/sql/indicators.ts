@@ -12,6 +12,7 @@ export async function processIndicators(db: PGlite, period: string): Promise<Ind
   const start = format(new Date(Date.UTC(year - 1, 9 + (quarter - 1) * 3, 1)))
   const end = format(new Date(Date.UTC(year - 1, 9 + quarter * 3, 1)))
   const numeric = (column: string) => `CASE WHEN btrim(${column}) ~ '^[0-9]{1,6}([.][0-9]{1,4})?$' THEN btrim(${column})::numeric END`
+  // ponytail: placeholder stubs (KPI-02, 05, 06) pending HDC spec and daily bed data; see rule text
   const definitions = [
     { code: 'KPI-01', name: 'ร้อยละหญิงตั้งครรภ์ฝากครรภ์ครั้งแรกก่อน 12 สัปดาห์', target: 75, owner: 'กลุ่มงานส่งเสริมสุขภาพ',
       rule: 'B = ครรภ์ที่มี ANC ครั้งแรกที่พบในข้อมูลนำเข้าอยู่ในไตรมาสนี้ แยก HOSPCODE/PID/GRAVIDA; A = GA ครั้งแรก 1–11 สัปดาห์ ค้นประวัติก่อนงวดทุก ZIP; GA ว่าง/ผิดรูปแบบเป็นส่วนขาดข้อมูล ไม่ใช้ ANCNO แทนครั้งแรก',
@@ -66,14 +67,15 @@ export async function processIndicators(db: PGlite, period: string): Promise<Ind
         FROM registered r LEFT JOIN latest m ON m.hospcode = r.hospcode AND m.pid = r.pid
       )`
       const result = await tx.query<{ numerator: number; denominator: number; gaps: IndicatorGap[] }>(`${sql}
-        SELECT (SELECT count(*)::int FROM cohort WHERE passed) AS numerator,
-          (SELECT count(*)::int FROM cohort) AS denominator,
+        SELECT count(*) FILTER (WHERE passed)::int AS numerator,
+          count(*)::int AS denominator,
           COALESCE((SELECT json_agg(g) FROM (
             SELECT c.hospcode, c.pid, COALESCE(p.cid, '') AS cid,
               COALESCE(NULLIF(btrim(concat_ws(' ', p.name, p.lname)), ''), 'ไม่พบทะเบียน PERSON') AS fullname, c.detail
             FROM cohort c LEFT JOIN person p ON p.hospcode = c.hospcode AND p.pid = c.pid
             WHERE NOT c.passed ORDER BY c.hospcode, c.pid, c.detail LIMIT 500
-          ) g), '[]'::json) AS gaps`, [start, end])
+          ) g), '[]'::json) AS gaps
+        FROM cohort`, [start, end])
       const { numerator, denominator, gaps } = result.rows[0]
       indicators.push({ ...base, numerator, denominator, gaps, gapCount: denominator - numerator,
         value: denominator ? numerator * 100 / denominator : null })

@@ -229,16 +229,16 @@ if (!app.requestSingleInstanceLock()) {
     })
     ipcMain.handle('indicators:save-workbook', async (event, period: unknown, bytes: unknown) => {
       const target = authorizedWindow(event)
+      const data = bytes instanceof Uint8Array ? bytes : Array.isArray(bytes) ? Uint8Array.from(bytes) : null
       if (typeof period !== 'string' || !/^25\d{2}-Q[1-4]$/.test(period)
-        || !Array.isArray(bytes) || bytes.length < 4 || bytes.length > 5_000_000
-        || !bytes.every(value => Number.isInteger(value) && value >= 0 && value <= 255)
-        || bytes[0] !== 80 || bytes[1] !== 75) throw new Error('ข้อมูล Excel ไม่ถูกต้อง')
+        || !data || data.length < 4 || data.length > 5_000_000
+        || data[0] !== 80 || data[1] !== 75) throw new Error('ข้อมูล Excel ไม่ถูกต้อง')
       const result = await dialog.showSaveDialog(target, {
         title: 'ส่งออก Excel', defaultPath: `indicators-${period}.xlsx`,
         filters: [{ name: 'Excel', extensions: ['xlsx'] }],
       })
       if (result.canceled || !result.filePath) return false
-      await writeFile(result.filePath, Buffer.from(bytes))
+      await writeFile(result.filePath, data)
       return true
     })
     ipcMain.handle('files:list', (event) => {
