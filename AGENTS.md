@@ -1,4 +1,4 @@
-﻿# PlkGap
+# PlkGap
 
 Do not add, edit, or delete this document without user authorization.
 
@@ -29,11 +29,13 @@ Do not add, edit, or delete this document without user authorization.
 
 Embedded PostgreSQL/WASM, no DB server/port/Docker; data: `userData/plkgap-pglite`.
 
-- Main process only; renderer must not import `@electric-sql/pglite` or `src/main/database.ts`. Keep `sandbox: true`, `nodeIntegration: false`.
-- All SQL stays in `src/main/database.ts`; functions receive `db`, not a global. `index.ts` only wires operations/checks authorization. Every `ipcMain.handle` calls `authorizedWindow(event)` to check sender and senderFrame; never duplicate or bypass it.
+- Main process only; renderer must not import `@electric-sql/pglite` or any main-process database/SQL module. Keep `sandbox: true`, `nodeIntegration: false`.
+- SQL is split by task in `src/main/sql/{task}.ts`; functions receive `db`, not a global. `database.ts` owns connection lifecycle and compatibility exports only; SQL modules must not import it. `index.ts` only wires operations/checks authorization. Every `ipcMain.handle` calls `authorizedWindow(event)` to check sender and senderFrame; never duplicate or bypass it.
 - One PGlite instance, opened in `app.whenReady()` before windows. Preserve single-instance lock; never open another instance on the same path.
 - Confirm exit on the window `close` event, not `window:close` IPC, covering X/Exit/Alt+F4/taskbar. Preserve `confirming`/`confirmedExit` against duplicate dialogs/loops; `before-quit` waits for `db.close()`.
 - All idempotent schema/migration work belongs in `initializeSchema(db)`, called before `openDatabase()` returns; no separate startup table creation. Initialize only on first use/component-version changes; subsequent starts read one `schema_init` row per component and skip unchanged work, not repeated CREATE/ALTER.
+
+Task modules: `schema` (initialization order), `schema-state` (version registry), `app-schema`, `file-schema`, `reference`, `geography`, `imports`, `structure-check`, `observations`, `data-count`, `indicators`, `api`, and `status`. Shared types/helpers live in `types.ts`/`shared.ts`. Keep existing schema versions, initialization order, and query behavior when moving code.
 
 ### Table initialization
 
@@ -50,7 +52,7 @@ Classify every new `public` table before implementing initialization. Use these 
 - Types 1/3/4 use `createAppTables()`/`createFileTables()`, never `c_` names. That prefix is reserved for type 2; database tests reconcile its count with reference/code loaders, excluding geography. Bump `APP_SCHEMA_VERSION` for system/log schema changes.
 - Types are not schema component names: retain `reference`, `structure_codes`, `geography`, `app`, `observations`; do not rename components to match categories and trigger re-init.
 - Sources under `src/main/reference/`: `c-tables.json`/`f43-tables.json` from `scripts/pull-reference-tables.mjs`, geography from `scripts/pull-geography.mjs`, boundaries from `scripts/pull-boundaries.mjs`. Read the 52-file list from `c_file`, never hardcode it.
-- Reference files are statically imported by `database.ts`, bundled in `out/main/index.js` and the installer. Tables initialize on first app launch, not during installation.
+- Reference files are statically imported by the task modules in `src/main/sql/`, bundled in `out/main/index.js` and the installer. Tables initialize on first app launch, not during installation.
 
 ### Standard codes and structure checks
 
@@ -66,7 +68,7 @@ Classify every new `public` table before implementing initialization. Use these 
 
 ### Observations
 
-- SQL lives only in `observationRules()` in `database.ts`, never in tables. `observ_check` stores only `rule_id`, `table_name`, `detail`, `level`, `sort_order`, `is_active` to control execution/order.
+- SQL lives only in `observationRules()` in `src/main/sql/observations.ts`, never in tables. `observ_check` stores only `rule_id`, `table_name`, `detail`, `level`, `sort_order`, `is_active` to control execution/order.
 - Only `syncObservationRules()` writes the registry: add/update catalog rules, remove retired rules, never overwrite `is_active`. Component `observations` uses a catalog digest; unchanged catalogs cause no writes.
 - `level`: `error` for mutually impossible rows, `warning` for suspicious rows requiring judgment. Store levels but hide them in results and rule selectors.
 - Report only the inspected zip using `importedFromZip` on the base file; comparison rows may span zips, always within equal `hospcode`. Every cross-file join/subquery starts with hospcode equality before PID/HID/CID matching. `duplicate-cid` groups/partitions by `hospcode, cid` across zips. Cross-zip counts group once then join; no per-row subqueries.
@@ -81,7 +83,7 @@ Classify every new `public` table before implementing initialization. Use these 
 
 ### Operations and tests
 
-- Add operations in order: `src/shared/api.ts` result type + `AppApi` method -> `src/main/database.ts` SQL function using `db.query<T>()` -> `src/main/index.ts` handler with `authorizedWindow(event)` -> `src/preload/index.ts` invoke matching `AppApi`. Channels use `domain:action` (e.g. `database:status`). Renderer uses typed `window.api`; never expose raw `ipcRenderer` through contextBridge.
+- Add operations in order: `src/shared/api.ts` result type + `AppApi` method -> `src/main/sql/{task}.ts` SQL function using `db.query<T>()` -> `src/main/index.ts` handler with `authorizedWindow(event)` -> `src/preload/index.ts` invoke matching `AppApi`. Channels use `domain:action` (e.g. `database:status`). Renderer uses typed `window.api`; never expose raw `ipcRenderer` through contextBridge.
 - Add DB logic cases in `scripts/test-database.ts` (temporary DB). Regenerate `structure-codes.json` via `generate-structure-codes.mjs` whenever generator/source data changes; tests deepEqual it with `buildStructureCodes(referenceData)`.
 - `scripts/test-electron.mjs` launches the real app via Playwright. Redirect userData with `PLKGAP_TEST_DATA_DIR`, never touch real data. Stub native `dialog.showMessageBox` through `application.evaluate`; update the stub when changing exit flow to prevent hangs.
 - Map tests require internet and tile `naturalWidth > 0`, not merely `<img>` existence, to catch CSP failures.
@@ -89,9 +91,9 @@ Classify every new `public` table before implementing initialization. Use these 
 ## Local REST API: `src/main/server.ts`
 
 - Main-process `node:http` server starts after `openDatabase()` and shares its instance. Bind only `127.0.0.1`; never send CORS headers. Default port 9988, override `PLKGAP_API_PORT`; tests use 9989. Busy port: log and let app start. Close server before `db.close()` in `before-quit`.
-- `server.ts` only routes/serializes JSON; SQL stays in `database.ts`. Add every new endpoint to `route()` and `help`; `GET /help` is the API documentation.
+- `server.ts` only routes/serializes JSON; SQL stays in `src/main/sql/`. Add every new endpoint to `route()` and `help`; `GET /help` is the API documentation.
 - `POST /sql`: read-only transaction with 15-second `statement_timeout`; PostgreSQL must reject writes, not a keyword blacklist (including modifying CTEs). Return a plain JSON array; metadata headers: `X-Row-Count`, `X-Truncated`, `X-Columns`.
-- Privacy list lives only in `blockedApiColumns` (`database.ts`). `createApiSchema()` creates one view per table in schema `api`, replacing blocked values with `'***'`. `runReadOnlySql()` uses `SET LOCAL ROLE plkgap_api` and `SET LOCAL search_path = api, public`.
+- Privacy list lives only in `blockedApiColumns` (`src/main/sql/api.ts`). `createApiSchema()` creates one view per table in schema `api`, replacing blocked values with `'***'`. `runReadOnlySql()` uses `SET LOCAL ROLE plkgap_api` and `SET LOCAL search_path = api, public`.
 - Never mask by returned column names: aliases, expressions, and subqueries must remain protected by views; preserve tests for all three. `plkgap_api` has only public-schema `USAGE` for PostGIS resolution, no access to public tables; explicit `public.person` queries must fail.
 - Entries with `table` mask only that table (e.g. `home.house`); entries without it mask matching columns everywhere. Component `api` rebuilds from a digest of blocked columns + all table structures and runs last in `initializeSchema()`.
 - `GET /desc` and `GET /tables` run as owner and may reveal column existence, never masked values.
