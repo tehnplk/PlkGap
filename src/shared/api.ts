@@ -207,7 +207,21 @@ export interface UpdateState {
   message?: string
 }
 
+export interface IndicatorGap {
+  hospcode: string; pid: string; cid: string; fullname: string; detail: string
+}
+export interface IndicatorResult {
+  code: string; name: string; owner: string; target: number
+  numerator: number; denominator: number; value: number | null
+  rule: string; unavailable?: string; gaps: IndicatorGap[]; gapCount: number
+}
+export interface IndicatorReport {
+  period: string; start: string; end: string; processedAt: string; indicators: IndicatorResult[]
+}
+
 export interface AppApi {
+  processIndicators: (period: string) => Promise<IndicatorReport>
+  saveIndicatorWorkbook: (period: string, bytes: number[]) => Promise<boolean>
   gatewayState: () => Promise<GatewayState>
   setGatewayEnabled: (enabled: boolean) => Promise<GatewayState>
   ssoState: () => Promise<SsoState>

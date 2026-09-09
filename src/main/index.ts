@@ -1,12 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { createSso } from './sso'
+import { processIndicators } from './database'
 import { createSsoStore } from './sso-store'
 import ssoConfig from './sso-config.json'
 import { autoUpdater } from 'electron-updater'
 import { createUpdater } from './updater'
 import { createSplash } from './splash'
 import { basename, join } from 'node:path'
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { apiPort, startApiServer } from './server'
 import { createGateway } from './gateway'
 import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, referenceCodeList, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
@@ -217,6 +218,24 @@ if (!app.requestSingleInstanceLock()) {
       authorizedWindow(event)
       return listHouseholds(db!)
     })
+    ipcMain.handle('indicators:process', (event, period: unknown) => {
+      authorizedWindow(event)
+      return processIndicators(db!, String(period ?? ''))
+    })
+    ipcMain.handle('indicators:save-workbook', async (event, period: unknown, bytes: unknown) => {
+      const target = authorizedWindow(event)
+      if (typeof period !== 'string' || !/^25\d{2}-Q[1-4]$/.test(period)
+        || !Array.isArray(bytes) || bytes.length < 4 || bytes.length > 5_000_000
+        || !bytes.every(value => Number.isInteger(value) && value >= 0 && value <= 255)
+        || bytes[0] !== 80 || bytes[1] !== 75) throw new Error('ข้อมูล Excel ไม่ถูกต้อง')
+      const result = await dialog.showSaveDialog(target, {
+        title: 'ส่งออก Excel', defaultPath: `indicators-${period}.xlsx`,
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+      })
+      if (result.canceled || !result.filePath) return false
+      await writeFile(result.filePath, Buffer.from(bytes))
+      return true
+    })
     ipcMain.handle('files:list', (event) => {
       authorizedWindow(event)
       return listStandardFiles(db!)
@@ -330,6 +349,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault()
     if (closing) return
     closing = true
+    ipcMain.removeHandler('indicators:process')
+    ipcMain.removeHandler('indicators:save-workbook')
     ipcMain.removeHandler('database:status')
     ipcMain.removeHandler('hospital:find')
     ipcMain.removeHandler('import:choose-file')

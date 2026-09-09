@@ -4,7 +4,9 @@
   "description": "Electron React Vite desktop app with embedded PostGIS",
   "main": "out/main/index.js",
   "scripts": {
-    "test": "npm run test:updater && npm run test:sso && npm run test:gateway && tsx scripts/test-database.ts && node scripts/test-electron.mjs",
+    "test": "npm run test:updater && npm run test:sso && npm run test:gateway && tsx scripts/test-database.ts && npm run test:indicators && node scripts/test-electron.mjs",
+    "test:indicators": "tsx scripts/test-indicators.ts",
+    "test:indicators:electron": "node scripts/test-indicators-electron.mjs",
     "test:gateway": "tsx scripts/test-gateway.ts",
     "test:sso": "tsx scripts/test-sso.ts",
     "dev": "node scripts/run-electron-vite.cjs dev",
