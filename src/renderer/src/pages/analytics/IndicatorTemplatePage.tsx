@@ -1,5 +1,5 @@
 import { SortableTable } from '../../SortableTable'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../Icon'
 
 interface Indicator { code: string; name: string; unit: string; target: number; value: number; owner: string }
@@ -13,9 +13,25 @@ const INDICATORS: Indicator[] = [
   { code: 'KPI-06', name: 'อัตราการครองเตียงผู้ป่วยใน', unit: '%', target: 80, value: 74.5, owner: 'กลุ่มงานบริการ' },
 ]
 
+const MOCK_PEOPLE = INDICATORS.map((indicator, indicatorIndex) => Array.from({ length: 15 }, (_, index) => ({
+  cid: `000${String(indicatorIndex + 1).padStart(2, '0')}${String(index + 1).padStart(8, '0')}`,
+  fullname: `บุคคลตัวอย่าง ${String(index + 1).padStart(2, '0')}`,
+  sex: indicator.code === 'KPI-01' || indicator.code === 'KPI-05' || index % 2 === 0 ? 'หญิง' : 'ชาย',
+  age: indicator.code === 'KPI-02' ? index % 6
+    : indicator.code === 'KPI-01' ? 20 + index
+      : indicator.code === 'KPI-05' ? 30 + index * 2 : 40 + index * 2,
+  passed: (index + indicatorIndex) % 3 !== 0,
+})))
+
 export function IndicatorTemplatePage() {
   const [period, setPeriod] = useState('2569-Q4')
   const [onlyBelow, setOnlyBelow] = useState(false)
+  const [selected, setSelected] = useState<Indicator | null>(null)
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    if (selected) dialog.current?.showModal()
+    else dialog.current?.close()
+  }, [selected])
   const rows = INDICATORS.filter((item) => !onlyBelow || item.value < item.target)
   const passed = INDICATORS.filter((item) => item.value >= item.target).length
 
@@ -47,7 +63,7 @@ export function IndicatorTemplatePage() {
 
     <div className="table-wrapper">
       <SortableTable className="data-table" aria-label="ตารางตัวชี้วัด">
-        <thead><tr><th>รหัส</th><th>ชื่อตัวชี้วัด</th><th>ผู้รับผิดชอบ</th><th className="col-right">เป้าหมาย</th><th className="col-right">ผลงาน</th><th>ความคืบหน้า</th></tr></thead>
+        <thead><tr><th>รหัส</th><th>ชื่อตัวชี้วัด</th><th>ผู้รับผิดชอบ</th><th className="col-right">เป้าหมาย</th><th className="col-right">ผลงาน</th><th>ความคืบหน้า</th><th>ส่วนขาด</th></tr></thead>
         <tbody>
           {rows.map((item) => {
             const ratio = Math.min(100, Math.round((item.value / item.target) * 100))
@@ -60,11 +76,29 @@ export function IndicatorTemplatePage() {
               <td style={{ minWidth: 140 }}>
                 <div className="progress"><span className={item.value >= item.target ? '' : 'below'} style={{ width: `${ratio}%` }} /></div>
               </td>
+              <td><button type="button" className="mock-button" onClick={() => setSelected(item)}>แสดงส่วนขาด</button></td>
             </tr>
           })}
         </tbody>
       </SortableTable>
     </div>
     <div className="mock-note"><p>ข้อมูลตัวอย่าง (mockup) สูตรคำนวณจริงจะเก็บเป็นเทมเพลต SQL ต่อหนึ่งตัวชี้วัด</p></div>
+    <dialog className="large-modal" ref={dialog} onClose={() => setSelected(null)} aria-label="แสดงส่วนขาด">
+      {selected && <>
+        <header>
+          <div><strong>แสดงส่วนขาด — {selected.code} {selected.name}</strong><small>ข้อมูลตัวอย่าง (mockup) 15 คน</small></div>
+          <button type="button" className="modal-close" aria-label="ปิด" onClick={() => setSelected(null)}><Icon name="close" size={16} /></button>
+        </header>
+        <div className="table-wrapper">
+          <SortableTable key={selected.code} className="data-table" aria-label="รายชื่อส่วนขาด">
+            <thead><tr><th>cid</th><th>fullname</th><th>sex</th><th>age</th><th>สถานะ</th></tr></thead>
+            <tbody>{MOCK_PEOPLE[INDICATORS.indexOf(selected)].map((person) => <tr key={person.cid}>
+              <td className="code-cell">{person.cid}</td><td>{person.fullname}</td><td>{person.sex}</td><td data-sort-value={person.age}>{person.age}</td>
+              <td><span className={`badge${person.passed ? '' : ' error'}`}>{person.passed ? 'ผ่าน' : 'ไม่ผ่าน'}</span></td>
+            </tr>)}</tbody>
+          </SortableTable>
+        </div>
+      </>}
+    </dialog>
   </>
 }
