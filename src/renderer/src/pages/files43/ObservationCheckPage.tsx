@@ -4,7 +4,6 @@ import { SortableTable } from '../../SortableTable'
 import { Icon } from '../../Icon'
 
 const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
-const levels = { error: 'ผิดพลาด', warning: 'ควรตรวจสอบ' }
 
 export function ObservationCheckPage() {
   const [log, setLog] = useState<ImportLogEntry[]>([])
@@ -97,15 +96,16 @@ export function ObservationCheckPage() {
       <p className="section-title">ผลตรวจ — {result.zipName}</p>
       <p className="hint-text">ตรวจเมื่อ {when.format(new Date(result.checkedAt))}</p>
       <div className="table-wrapper">
-        <SortableTable className="data-table" aria-label="ผลตรวจตามข้อสังเกต">
+        <SortableTable className="data-table" aria-label="ผลตรวจตามข้อสังเกต"
+          defaultSort={[{ column: 0, descending: false }, { column: 1, descending: false }]}>
           <thead><tr><th>แฟ้ม</th><th>ข้อสังเกต</th><th className="col-right">แถวที่ตรวจ</th><th className="col-right">ไม่เข้าเกณฑ์ / ข้อมูลไม่พอ</th><th className="col-right">พบข้อสังเกต</th><th>ผล</th><th>รายละเอียด</th></tr></thead>
           <tbody>{result.findings.map((finding) => <tr key={finding.id}>
             <td><code>{finding.tableName.toUpperCase()}</code></td><td>{finding.detail}</td>
             <td className="col-right num-cell">{finding.checked.toLocaleString('en-US')}</td>
             <td className="col-right num-cell">{finding.skipped.toLocaleString('en-US')}</td>
             <td className="col-right num-cell">{finding.found.toLocaleString('en-US')}</td>
-            <td><span className={`status-pill status-${finding.found ? finding.level : finding.checked ? 'passed' : 'pending'}`}>
-              {finding.found ? levels[finding.level] : finding.checked ? 'ไม่พบข้อสังเกต' : 'ไม่มีข้อมูลเข้าเกณฑ์'}
+            <td><span className={`status-pill status-${finding.found ? 'error' : finding.checked ? 'passed' : 'pending'}`}>
+              {finding.found ? 'พบข้อสังเกต' : finding.checked ? 'ไม่พบข้อสังเกต' : 'ไม่มีข้อมูลเข้าเกณฑ์'}
             </span></td>
             <td><button type="button" className="mock-button" disabled={!finding.found || loadingRows} onClick={() => void showRows(finding.id)}>ดูแถวที่พบ</button></td>
           </tr>)}</tbody>
@@ -118,7 +118,7 @@ export function ObservationCheckPage() {
       </header>
       <div className="table-wrapper">
         <SortableTable className="data-table" aria-label="ทะเบียนข้อสังเกต">
-          <thead><tr><th>เลือก</th><th className="col-right">ลำดับ</th><th>รหัสกฎ</th><th>แฟ้ม</th><th>ข้อสังเกต</th><th>ระดับ</th></tr></thead>
+          <thead><tr><th>เลือก</th><th className="col-right">ลำดับ</th><th>รหัสกฎ</th><th>แฟ้ม</th><th>ข้อสังเกต</th></tr></thead>
           <tbody>{rules.map((rule, index) => <tr key={rule.id}>
             <td><input type="checkbox" checked={picked[rule.id] ?? false} aria-label={rule.detail}
               onChange={(event) => setPicked({ ...picked, [rule.id]: event.target.checked })} /></td>
@@ -126,7 +126,6 @@ export function ObservationCheckPage() {
             <td><code>{rule.id}</code></td>
             <td><code>{rule.tableName.toUpperCase()}</code></td>
             <td>{rule.detail}</td>
-            <td><span className={`status-pill status-${rule.level}`}>{levels[rule.level]}</span></td>
           </tr>)}</tbody>
         </SortableTable>
       </div>
@@ -136,7 +135,7 @@ export function ObservationCheckPage() {
         <span className="modal-actions-gap" />
         <button type="button" className="mock-button" onClick={() => setPicking('')}>ยกเลิก</button>
         <button type="button" className="mock-button primary" disabled={!rules.some((rule) => picked[rule.id])}
-          onClick={() => void check()}>ตกลง</button>
+          onClick={() => void check()}>เริ่มตรวจสอบ</button>
       </div>
     </dialog>
     <dialog className="large-modal" ref={dialog} onClose={() => setDetails(null)} aria-label="รายละเอียดข้อสังเกต">

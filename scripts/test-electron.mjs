@@ -1,6 +1,6 @@
 import { _electron as electron, expect } from '@playwright/test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, access } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
 import yazl from 'yazl'
 import { tmpdir } from 'node:os'
@@ -8,8 +8,12 @@ import { join } from 'node:path'
 import reference from '../src/main/reference/c-tables.json' with { type: 'json' }
 import files from '../src/main/reference/f43-tables.json' with { type: 'json' }
 import boundaries from '../src/main/reference/boundaries.json' with { type: 'json' }
+import structureCodes from '../src/main/reference/structure-codes.json' with { type: 'json' }
+import { startSsoTestServer } from './sso-test-server.mjs'
+import tablesInUse from '../src/main/reference/tables-in-use.json' with { type: 'json' }
 
-const referenceRows = reference.tables.reduce((sum, table) => sum + table.rows.length, 0)
+const referenceTables = [...reference.tables.filter((table) => tablesInUse.tables.includes(table.name)), ...structureCodes.tables]
+const referenceRows = referenceTables.reduce((sum, table) => sum + table.rows.length, 0)
 // A fresh temp userData is exactly the state of a brand new machine after install.
 const directory = await mkdtemp(join(tmpdir(), 'plkgap-ui-test-'))
 // A stand-in for the Desktop, so the test never reads the real one.
@@ -24,7 +28,8 @@ function writeZip(path, entries) {
       const value = /(^|\/)person\.txt$/i.test(name)
         ? 'HOSPCODE|PID|CID|NATION|PRENAME|SEX|DISCHARGE|DDISCHARGE\nGA0014056|TEST1|123|099|003|2|1|20260901'
         : /(^|\/)service\.txt$/i.test(name)
-          ? 'HOSPCODE|PID|SEQ|DATE_SERV\nGA0014056|TEST1|1|20260902' : content
+          ? 'HOSPCODE|PID|SEQ|DATE_SERV\nGA0014056|TEST1|1|20260902'
+          : /(^|\/)village\.txt$/i.test(name) ? 'HOSPCODE|VID|WASTEWATER\nGA0014056|01|2' : content
       zip.addBuffer(Buffer.from(value), name)
     }
     zip.outputStream.pipe(createWriteStream(path)).on('close', resolve).on('error', reject)
@@ -41,21 +46,98 @@ await writeZip(badZip, ['F43_BAD/PERSON.txt', 'F43_BAD/holiday-photo.jpg'])
 // A port of its own, so a PlkGap the developer already has open does not collide with the test.
 const apiPort = 9989
 const api = `http://127.0.0.1:${apiPort}`
-const env = { ...process.env, PLKGAP_TEST_DATA_DIR: directory, PLKGAP_IMPORT_DIR: importDirectory, PLKGAP_API_PORT: String(apiPort) }
+const testSso = await startSsoTestServer()
+const env = { ...process.env, PLKGAP_TEST_DATA_DIR: directory, PLKGAP_IMPORT_DIR: importDirectory, PLKGAP_API_PORT: String(apiPort), PLKGAP_TEST_SSO_ISSUER: testSso.issuer }
 delete env.ELECTRON_RUN_AS_NODE
 let application
 try {
   application = await electron.launch({ args: ['.'], env, timeout: 60000 })
-  const page = await application.firstWindow({ timeout: 60000 })
+  // The splash comes up first while the database opens, so the first window is not the app.
+  const splash = await application.firstWindow({ timeout: 60000 })
+  assert.ok(splash.url().startsWith('data:'), `the splash shows first, got ${splash.url()}`)
+  await expect(splash.locator('h1')).toHaveText('PLK GAP')
+  await expect(splash.locator('#status')).not.toBeEmpty()
+  await mkdir('artifacts', { recursive: true })
+  await splash.screenshot({ path: 'artifacts/plkgap-splash.png' })
+  let page = application.windows().find((window) => !window.url().startsWith('data:'))
+  while (!page) {
+    page = await application.waitForEvent('window', { timeout: 60000 })
+    if (page.url().startsWith('data:')) page = undefined
+  }
+  await expect.poll(() => application.windows().some((window) => window.url().startsWith('data:')),
+    { timeout: 30000 }).toBe(false)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('status').filter({ hasText: 'Connected' }).waitFor({ timeout: 60000 })
   // First run on a new machine: the c_* reference data is already usable and the 52 files exist empty.
   const statusBar = page.locator('.status-bar')
-  await expect(statusBar).toContainText(`${reference.tables.length} ตารางอ้างอิง`)
+  await expect(statusBar).toContainText(`${referenceTables.length} ตารางอ้างอิง`)
   await expect(statusBar).toContainText(`${referenceRows.toLocaleString('en-US')} รายการ`)
   await expect(statusBar).toContainText(`${files.tables.length} แฟ้มพร้อมนำเข้า`)
   await mkdir('artifacts', { recursive: true })
+  // Signed out, every menu is a dead end that points at the account button in the sidebar footer.
+  const loginModal = page.getByRole('dialog', { name: 'ต้องเข้าสู่ระบบก่อน', exact: true })
+  const sidebarNav = page.getByRole('navigation', { name: 'Sidebar navigation' })
+  await sidebarNav.getByRole('button', { name: 'นำเข้าข้อมูล', exact: true }).click()
+  await expect(loginModal).toBeVisible()
+  await expect(loginModal).toContainText('มุมซ้ายล่าง')
+  await expect(page.getByRole('region', { name: /window$/ })).toHaveCount(0)
+  await page.screenshot({ path: 'artifacts/plkgap-login-required.png', fullPage: true })
+  await loginModal.getByRole('button', { name: 'รับทราบ', exact: true }).click()
+  await expect(loginModal).toBeHidden()
+  // The File and เกี่ยวกับ menus go through the same gate.
+  await page.getByRole('menuitem', { name: 'File', exact: true }).click()
+  await page.getByRole('menu', { name: 'File' }).getByRole('menuitem', { name: 'นำเข้าข้อมูล', exact: true }).click()
+  await expect(loginModal).toBeVisible()
+  await loginModal.getByRole('button', { name: 'ปิด', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'เกี่ยวกับ', exact: true }).click()
+  await page.getByRole('menu', { name: 'เกี่ยวกับ' }).getByRole('menuitem').first().click()
+  await expect(loginModal).toBeVisible()
+  await loginModal.getByRole('button', { name: 'รับทราบ', exact: true }).click()
+  await expect(page.getByRole('region', { name: /window$/ })).toHaveCount(0)
+  // The API switch lives in the account panel, which does not exist without an account.
+  await expect(page.getByRole('switch', { name: 'API Gateway', exact: true })).toHaveCount(0)
+
+  await application.evaluate(({ shell }) => {
+    globalThis.testSsoBrowserUrl = ''
+    shell.openExternal = async (url) => { globalThis.testSsoBrowserUrl = url }
+  })
+  await page.getByRole('button', { name: 'เข้าสู่ระบบ', exact: true }).click()
+  await expect.poll(() => application.evaluate(() => globalThis.testSsoBrowserUrl)).not.toBe('')
+  const authorizationUrl = await application.evaluate(() => globalThis.testSsoBrowserUrl)
+  assert.equal(new URL(authorizationUrl).origin, testSso.issuer, 'login uses the system-browser entry point')
+  assert.equal((await fetch(authorizationUrl)).status, 200)
+  const account = page.getByRole('button', { name: 'สมชาย ทดสอบระบบ', exact: true })
+  await expect(account).toBeVisible()
+  await account.click()
+  const accountPopup = page.getByRole('dialog', { name: 'บัญชีผู้ใช้', exact: true })
+  await expect(accountPopup).toBeVisible()
+  assert.deepEqual(await accountPopup.locator('dt').allTextContents(), ['ชื่อ นามสกุล', 'ตำแหน่ง', 'หน่วยงาน'])
+  await expect(accountPopup).toContainText('นักวิชาการสาธารณสุข')
+  await expect(accountPopup).toContainText('สำนักงานสาธารณสุขจังหวัดพิษณุโลก')
+  await expect(accountPopup.getByRole('button', { name: 'Logout', exact: true })).toBeVisible()
+  const accountBounds = await account.boundingBox()
+  const popupBounds = await accountPopup.boundingBox()
+  assert.ok(popupBounds.y + popupBounds.height <= accountBounds.y, 'account panel opens upwards')
+  const sidebarBounds = await page.locator('.sidebar').boundingBox()
+  const statusBoundsAfterLogin = await statusBar.boundingBox()
+  assert.equal(statusBoundsAfterLogin.x, sidebarBounds.x + sidebarBounds.width, 'status bar starts after the sidebar')
+  assert.equal(statusBoundsAfterLogin.x, (await page.locator('.workspace').boundingBox()).x)
+  await page.screenshot({ path: 'artifacts/plkgap-sso-account.png', fullPage: true })
+  await page.keyboard.press('Escape')
+  await expect(accountPopup).toBeHidden()
+  await expect(account).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(accountPopup.getByRole('switch', { name: 'Dark theme' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  const encryptedSession = await readFile(join(directory, 'sso-session.bin'))
+  const protectedSession = await application.evaluate(({ safeStorage }, bytes) => {
+    const encrypted = Buffer.from(bytes)
+    const value = JSON.parse(safeStorage.decryptString(encrypted))
+    return value.subject === 'test-provider' && !encrypted.includes(Buffer.from(value.accessToken))
+  }, [...encryptedSession])
+  assert.equal(protectedSession, true, 'session is encrypted with OS-backed safeStorage')
+  assert.deepEqual(Object.keys(await page.evaluate(() => window.api.ssoState())).sort(), ['profile', 'status'])
   await page.screenshot({ path: 'artifacts/plkgap-main-ui.png', fullPage: true })
   const navigation = page.getByRole('navigation', { name: 'Sidebar navigation' })
   await expect(page.getByRole('toolbar')).toHaveCount(0)
@@ -222,6 +304,11 @@ try {
 
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false')
+  await account.click()
+  await expect(accountPopup).toBeVisible()
+  assert.ok((await accountPopup.boundingBox()).x >= 0, 'collapsed sidebar account popup is not clipped')
+  await page.screenshot({ path: 'artifacts/plkgap-sso-collapsed.png', fullPage: true })
+  await page.keyboard.press('Escape')
   assert.ok((await page.locator('.workspace').boundingBox()).width > workspaceBounds.width, 'Collapsing gives space back to MDI')
   await expect(importWindow).toBeVisible()
   await page.screenshot({ path: 'artifacts/plkgap-sidebar-collapsed.png', fullPage: true })
@@ -299,7 +386,7 @@ try {
   // Households come from the HOME file as green house markers inside a cluster layer.
   await expect(map.locator('.map-legend')).toContainText('ครัวเรือนที่มีพิกัด')
   await expect(map.locator('.leaflet-control-layers-overlays')).toContainText('ครัวเรือน')
-  // Administrative outlines come from the SUB-HDC PostGIS boundaries seeded into c_district.
+  // Administrative outlines come from the boundaries seeded into c_district / c_subdistrict.
   await expect(map.locator('.leaflet-control-layers-overlays')).toContainText('ขอบเขตอำเภอ')
   await expect(map.locator('.leaflet-control-layers-overlays')).toContainText('ขอบเขตตำบล')
   // One SVG path per district. Whether a given polygon is inside the current viewport depends on
@@ -320,8 +407,8 @@ try {
     .toHaveText('ผลตรวจ — F43_07494_20260819111824.ZIP', { timeout: 60000 })
   const findingTable = structure.locator('table[aria-label="ผลตรวจตามโครงสร้าง"]')
   const findings = findingTable.locator('tbody tr')
-  await expect(findingTable).toContainText('ความยาวเกิน 5 อักขระ')
-  await expect(findingTable).toContainText('ห้ามเป็นค่าว่าง')
+  // One row per field now: the rule each record broke belongs to the drill-down, not the grid.
+  await expect(findings.first()).toBeVisible()
   const findingNames = await findings.evaluateAll((rows) => rows.map((row) => [row.cells[0].textContent, row.cells[1].textContent]))
   const nameOrder = new Intl.Collator('th', { numeric: true, sensitivity: 'base' })
   assert.deepEqual(findingNames, [...findingNames].sort((a, b) => nameOrder.compare(a[0], b[0]) || nameOrder.compare(a[1], b[1])))
@@ -334,11 +421,12 @@ try {
   assert.ok((await findings.locator('td:first-child').allTextContents()).every((name) => name === issueFileNames[0]))
   await fileFilter.selectOption('all')
   assert.deepEqual(await findingTable.locator('thead th').allInnerTexts(),
-    ['แฟ้ม', 'ฟิลด์', 'รายละเอียด', 'เกณฑ์', 'จำนวนแถว', 'ไม่ผ่าน', 'ร้อยละ', 'ระดับ', 'การทำงาน'])
+    ['แฟ้ม', 'ฟิลด์', 'รายละเอียด', 'จำนวนแถว', 'ผ่าน', 'ร้อยละ', 'ไม่ผ่าน'])
   const fieldDefinition = reference.tables.find((table) => table.name === 'c_files_schema').rows
     .find((row) => row.table_name === findingNames[0][0] && row.name === findingNames[0][1])
   await expect(findings.first().locator('td').nth(2)).toHaveText(fieldDefinition.description || fieldDefinition.caption)
-  await expect(findings.first()).toContainText('100.00')
+  // ร้อยละ counts what passed, so a field every row fails reads 0.00.
+  await expect(findings.first()).toContainText('0.00')
   const firstCount = await findings.count()
   assert.ok(firstCount > 0, 'the structure check reports what it found')
   await structure.getByLabel('กรองระดับ').selectOption('error')
@@ -347,8 +435,9 @@ try {
   await expect(structure).toContainText('ไม่พบรายการตามตัวกรองที่เลือก')
   await structure.getByLabel('กรองระดับ').selectOption('all')
   await expect(findings).toHaveCount(firstCount)
-  await findings.first().getByRole('button', { name: 'ดูแถวที่ไม่ผ่าน' }).click()
-  const modal = structure.locator('dialog.large-modal')
+  // The failing count is the way in: clicking it opens every failing record of that field.
+  await findings.first().locator('td').last().getByRole('button').click()
+  const modal = structure.locator('dialog[aria-label="แถวที่ไม่ผ่านเกณฑ์"]')
   const failingTable = modal.locator('table[aria-label="แถวที่ไม่ผ่านเงื่อนไข"]')
   await expect(modal).toBeVisible()
   await expect(failingTable.locator('tbody tr')).toHaveCount(1)
@@ -356,6 +445,9 @@ try {
   for (const column of ['HOSPCODE', 'PID', 'SEQ', 'DATETIME_SERV']) {
     assert.ok(shownColumns.includes(column), `${column} is a standing column, got ${shownColumns.join(', ')}`)
   }
+  assert.equal(shownColumns.at(-1), 'เกณฑ์', 'each record says which rule it broke')
+  assert.ok((await failingTable.locator('tbody tr td:last-child').allInnerTexts()).every((rule) => rule.trim()),
+    'no record is left without a rule')
   const beforeDrag = await modal.boundingBox()
   const modalHeader = modal.locator('header')
   const headerBox = await modalHeader.boundingBox()
@@ -367,9 +459,45 @@ try {
   assert.ok(afterDrag.x > beforeDrag.x + 50 && afterDrag.y > beforeDrag.y + 20, 'The modal moves with its header')
   await modal.getByRole('button', { name: 'ปิด', exact: true }).click()
   await expect(modal).toBeHidden()
+  await fileFilter.selectOption('village')
+  const invalidCode = findings.filter({ hasText: 'WASTEWATER' })
+  await expect(invalidCode).toHaveCount(1)
+  await invalidCode.locator('td').last().getByRole('button').click()
+  await expect(modal).toBeVisible()
+  await expect(failingTable.locator('thead')).toContainText('WASTEWATER')
+  await expect(failingTable.locator('tbody tr')).toHaveCount(1)
+  const codeRow = failingTable.locator('tbody tr td')
+  await expect(codeRow.nth(await codeRow.count() - 2)).toHaveText('2')
+  await expect(codeRow.last()).toHaveText('ไม่ตรงตามรหัสมาตรฐาน')
+  await page.screenshot({ path: 'artifacts/plkgap-structure-code-check.png', fullPage: true })
+  await modal.getByRole('button', { name: 'ปิด', exact: true }).click()
+  // The field name opens the list it is judged against, whenever the database holds one.
+  const codesModal = structure.locator('dialog[aria-label="รหัสมาตรฐานของฟิลด์"]')
+  await invalidCode.getByRole('button', { name: 'WASTEWATER' }).click()
+  await expect(codesModal).toBeVisible()
+  await expect(codesModal).toContainText('c_village_wastewater')
+  const codesTable = codesModal.locator('table[aria-label="รหัสมาตรฐานใน c_village_wastewater"]')
+  await expect(codesTable.locator('tbody tr')).toHaveCount(3)
+  await expect(codesTable.locator('tbody tr').first()).toContainText('0')
+  await page.screenshot({ path: 'artifacts/plkgap-structure-code-list.png', fullPage: true })
+  await codesModal.getByRole('button', { name: 'ปิด', exact: true }).click()
+  await expect(codesModal).toBeHidden()
   await fileFilter.selectOption(issueFileNames[0].toLowerCase())
+  // The status bar reports the run at its far right. Arm the wait before the click: the check can
+  // finish before an assertion would even look, and the bar clears itself when it does.
+  const statusProgress = page.locator('.status-bar .status-progress')
+  const captured = page.waitForFunction(() => {
+    const bar = document.querySelector('.status-bar .status-progress')
+    const end = document.querySelector('.status-bar .status-end')
+    if (!bar || !end) return null
+    return { text: bar.textContent, right: bar.getBoundingClientRect().right, endRight: end.getBoundingClientRect().right }
+  }, null, { timeout: 60000, polling: 30 })
   await structureRuns.first().getByRole('button', { name: 'ตรวจตามโครงสร้าง' }).click()
+  const shown = await (await captured).jsonValue()
+  assert.ok(shown.text.includes('ตรวจตามโครงสร้าง'), `the status bar names the running check, got ${shown.text}`)
+  assert.ok(shown.right > shown.endRight - 20, 'the progress sits at the far right of the status bar')
   await expect(findings).toHaveCount(firstCount, { timeout: 60000 })
+  await expect(statusProgress).toBeHidden({ timeout: 10000 })
   await expect(fileFilter).toHaveValue('all')
   await page.screenshot({ path: 'artifacts/plkgap-structure-check.png', fullPage: true })
 
@@ -378,7 +506,7 @@ try {
   // Checking asks which rules to run first: the register comes up as a picker.
   const startCheck = () => observations.getByRole('button', { name: 'ตรวจตามข้อสังเกต', exact: true }).click()
   const picker = observations.getByRole('dialog', { name: 'ทะเบียนข้อสังเกต' })
-  const confirm = () => picker.getByRole('button', { name: 'ตกลง', exact: true })
+  const confirm = () => picker.getByRole('button', { name: 'เริ่มตรวจสอบ', exact: true })
   await startCheck()
   await expect(picker).toBeVisible()
   const register = picker.getByRole('table', { name: 'ทะเบียนข้อสังเกต', exact: true })
@@ -387,11 +515,21 @@ try {
   await expect(register.getByRole('checkbox')).toHaveCount(registered)
   // Every registered rule starts ticked, so confirming runs the lot.
   await expect(picker.getByRole('checkbox', { checked: true })).toHaveCount(registered)
+  // Same status bar, the other check: catch it in one shot, it clears itself when the run ends.
+  const observationProgress = page.waitForFunction(() => {
+    const bar = document.querySelector('.status-bar .status-progress')
+    return bar ? bar.textContent : null
+  }, null, { timeout: 60000, polling: 30 })
   await confirm().click()
+  assert.ok((await (await observationProgress).jsonValue()).includes('ตรวจตามข้อสังเกต'),
+    'the status bar names the observation run')
   await expect(picker).toBeHidden()
   const observationTable = observations.getByRole('table', { name: 'ผลตรวจตามข้อสังเกต', exact: true })
   await expect(observationTable.locator('tbody tr')).toHaveCount(registered)
   await expect(observationTable).not.toContainText('NCDSCREEN')
+  // The result grid reads by file, so it opens sorted on the file it checked.
+  const observedFiles = await observationTable.locator('tbody tr td:first-child').allInnerTexts()
+  assert.deepEqual(observedFiles, [...observedFiles].sort(nameOrder.compare), 'observations open sorted by file')
   // The fixture only fills PERSON and SERVICE, so exactly the three rules reading them trip.
   const observationEntries = observationTable.locator('tbody tr')
     .filter({ has: page.locator('.status-pill.status-error, .status-pill.status-warning') })
@@ -486,6 +624,31 @@ try {
   assert.equal((await fetch(`${api}/sql`)).status, 405)
   assert.equal((await fetch(`${api}/nothing-here`)).status, 404)
 
+  // The account panel owns the API switch, so it exists only once there is a signed-in account.
+  const gatewayReach = async () => {
+    try { return (await fetch(`${api}/help`)).status } catch { return 'refused' }
+  }
+  assert.equal(await gatewayReach(), 200, 'the API answers before the switch is touched')
+  await account.click()
+  const gatewaySwitch = accountPopup.getByRole('switch', { name: 'API Gateway', exact: true })
+  await expect(gatewaySwitch).toHaveAttribute('aria-checked', 'true')
+  await expect(gatewaySwitch).toHaveText('เปิด')
+  await expect(accountPopup).toContainText(`127.0.0.1:${apiPort}`)
+  await gatewaySwitch.click()
+  await expect(gatewaySwitch).toHaveAttribute('aria-checked', 'false')
+  await expect(gatewaySwitch).toHaveText('ปิด')
+  await expect.poll(gatewayReach, { timeout: 15000 }).toBe('refused')
+  await page.screenshot({ path: 'artifacts/plkgap-gateway-off.png', fullPage: true })
+  // The choice is written where the app keeps it, so the next start opens the same way.
+  assert.deepEqual(JSON.parse(await readFile(join(directory, 'api-gateway.json'), 'utf8')), { enabled: false },
+    'turning the API off is remembered on disk')
+  await gatewaySwitch.click()
+  await expect(gatewaySwitch).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(gatewayReach, { timeout: 15000 }).toBe(200)
+  assert.deepEqual(JSON.parse(await readFile(join(directory, 'api-gateway.json'), 'utf8')), { enabled: true })
+  await page.keyboard.press('Escape')
+  await expect(accountPopup).toBeHidden()
+
   await navigation.getByRole('button', { name: 'ตั้งค่าหน่วยบริการ', exact: true }).click()
   const serviceUnit = page.getByRole('region', { name: 'ตั้งค่าหน่วยบริการ - ServiceUnitPage window' })
   // Looks the unit up in the seeded c_hospital table over IPC — proves reference data is usable.
@@ -551,6 +714,11 @@ try {
   const smallImport = await importWindow.boundingBox()
   assert.ok(smallImport.x >= workspaceBox.x && smallImport.x + smallImport.width <= workspaceBox.x + workspaceBox.width + 1)
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)
+  await account.click()
+  await expect(accountPopup).toBeVisible()
+  const smallPopup = await accountPopup.boundingBox()
+  assert.ok(smallPopup.y >= 0 && smallPopup.x + smallPopup.width <= 640, 'account popup fits the small viewport')
+  await page.keyboard.press('Escape')
   await page.screenshot({ path: 'artifacts/plkgap-small-window.png', fullPage: true })
   const divider = page.getByRole('separator', { name: 'Resize sidebar' })
   async function dragSidebarTo(x) {
@@ -589,6 +757,12 @@ try {
   await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true)
   await application.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; win.restore(); win.setSize(1100, 760); win.focus() })
   await page.screenshot({ path: 'artifacts/plkgap-custom-titlebar.png', fullPage: true })
+  await account.click()
+  await accountPopup.getByRole('button', { name: 'Logout', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'เข้าสู่ระบบ', exact: true })).toBeVisible()
+  await expect(accountPopup).toBeHidden()
+  await expect.poll(() => testSso.calls.revoked.length).toBe(1)
+  await assert.rejects(access(join(directory, 'sso-session.bin')), { code: 'ENOENT' })
   await application.evaluate(({ dialog }) => {
     globalThis.confirmCalls = 0
     dialog.showMessageBox = async () => { globalThis.confirmCalls++; return { response: 1 } }
@@ -605,6 +779,7 @@ try {
   console.log('PASS: Electron MDI menu groups, sidebar collapse, move/resize, minimize/restore, tile/cascade, keyboard menu, small viewport, household map tiles, settings form, about/developers menu and database status')
 } finally {
   if (application) await application.close()
+  await testSso.close()
   await rm(directory, { recursive: true, force: true })
   await rm(importDirectory, { recursive: true, force: true })
 }

@@ -1,4 +1,5 @@
 import { Icon } from './Icon'
+import { AccountFooter } from './AccountFooter'
 import type { IconName } from './Icon'
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
@@ -111,6 +112,7 @@ export function Sidebar({ activeId, groups }: SidebarProps) {
         </div>
       })}
     </nav>
+    <AccountFooter expanded={expanded} />
     <div className="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={44} aria-valuemax={maximum} aria-valuenow={width} aria-valuetext={expanded ? `${Math.round(width)} pixels` : 'Collapsed'} tabIndex={0}
       onPointerDown={startDrag}
       onPointerMove={(event) => { if (drag.current) resize(drag.current.width + event.clientX - drag.current.x) }}

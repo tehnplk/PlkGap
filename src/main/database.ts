@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { PGlite } from '@electric-sql/pglite'
 import { postgis } from '@electric-sql/pglite-postgis'
 import type { ObservationLevel, ObservationRule, ObservationRuleId, ObservationFinding, ObservationResult } from '../shared/api'
-import type { BoundaryCollection, BoundaryLevel, DataCountResult, DatabaseStatus, FailingRows, Hospital, Household, ImportLogEntry, StructureCheckResult, StructureFinding } from '../shared/api'
+import type { BoundaryCollection, BoundaryLevel, CheckProgress, DataCountResult, DatabaseStatus, FailingRows, Hospital, Household, ImportLogEntry, ReferenceCodeList, StructureCheckResult, StructureFinding } from '../shared/api'
 import referenceData from './reference/c-tables.json'
 import fileStructure from './reference/f43-tables.json'
 import geographyData from './reference/geography.json'
 import boundaryData from './reference/boundaries.json'
+import structureCodes from './reference/structure-codes.json'
+import tablesInUse from './reference/tables-in-use.json'
 
 export interface ReferenceTable {
   name: string
@@ -39,11 +41,15 @@ export interface FileStructure {
   tables: FileTable[]
 }
 
-export async function openDatabase(path: string) {
+/** Named as each startup phase begins, so a splash screen can say what is taking the time. */
+export type SchemaPhase = (phase: string) => void
+
+export async function openDatabase(path: string, onPhase?: SchemaPhase) {
   const db = new PGlite(path, { extensions: { postgis } })
   try {
+    onPhase?.('postgis')
     await db.exec('CREATE EXTENSION IF NOT EXISTS postgis;')
-    const setup = await initializeSchema(db)
+    const setup = await initializeSchema(db, {}, onPhase)
     if (setup.firstRun) {
       console.log(`PlkGap: initialized ${setup.reference.table_count} c_* reference tables `
         + `(${setup.reference.row_count} rows) and ${setup.files.table_count} 43-file tables`)
@@ -59,8 +65,8 @@ export async function databaseStatus(db: PGlite, path: string): Promise<Database
   const { rows } = await db.query<Omit<DatabaseStatus, 'path'>>(`
     SELECT version() AS version, postgis_full_version() AS postgis,
       ST_AsText(ST_SetSRID(ST_MakePoint(100.2659, 16.8211), 4326)) AS geometry,
-      (SELECT table_count FROM schema_init WHERE component = 'reference')::int AS "referenceTables",
-      (SELECT row_count FROM schema_init WHERE component = 'reference')::int AS "referenceRows",
+      (SELECT SUM(table_count) FROM schema_init WHERE component IN ('reference', 'structure_codes'))::int AS "referenceTables",
+      (SELECT SUM(row_count) FROM schema_init WHERE component IN ('reference', 'structure_codes'))::int AS "referenceRows",
       (SELECT COUNT(*) FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name IN (SELECT file_name FROM c_file))::int AS "fileTables"
   `)
@@ -127,6 +133,15 @@ const quote = (name: string) => `"${name.replace(/"/g, '""')}"`
 const versionOf = (data: { source: string; pulledAt: string }) => `${data.source}@${data.pulledAt}`
 
 /**
+ * What PlkGap seeds from the `c-tables.json` snapshot: the 43-file dictionary and file list, and
+ * the service-unit registry. The `c_*` code lookups in that file are not seeded — the standard
+ * code lists come from `structure-codes.json` instead.
+ * Bump the revision when this list changes so an installed database is re-seeded once.
+ */
+export const referenceTablesInUse: string[] = tablesInUse.tables
+const REFERENCE_TABLES_REVISION = 2
+
+/**
  * Records what has already been set up, so the schema is built once — on the first run of a
  * fresh install — and every later start only reads one row per component.
  */
@@ -138,7 +153,7 @@ async function ensureInitTable(db: PGlite) {
     row_count integer NOT NULL,
     initialized_at timestamptz NOT NULL DEFAULT now()
   );
-  DROP TABLE IF EXISTS reference_load;`)
+  DROP TABLE IF EXISTS reference_load CASCADE;`)
 }
 
 async function initializedVersion(db: PGlite, component: string) {
@@ -147,7 +162,7 @@ async function initializedVersion(db: PGlite, component: string) {
   return rows[0]
 }
 
-async function recordInit(db: PGlite, component: string, version: string, tables: number, rows: number) {
+async function recordInit(db: Pick<PGlite, 'query'>, component: string, version: string, tables: number, rows: number) {
   await db.query(`INSERT INTO schema_init (component, version, table_count, row_count)
     VALUES ($1, $2, $3, $4)
     ON CONFLICT (component) DO UPDATE
@@ -162,17 +177,73 @@ async function recordInit(db: PGlite, component: string, version: string, tables
 export async function initializeSchema(db: PGlite, data: {
   reference?: ReferenceData
   structure?: FileStructure
-} = {}) {
+} = {}, onPhase?: SchemaPhase) {
   await ensureInitTable(db)
+  onPhase?.('reference')
   const reference = await loadReferenceTables(db, data.reference)
+  onPhase?.('geography')
   const geography = await loadGeographyTables(db)
+  onPhase?.('app')
   const app = await createAppTables(db)
+  onPhase?.('observations')
   const observations = await syncObservationRules(db)
+  onPhase?.('files43')
   const files = await createFileTables(db, data.structure)
+  onPhase?.('structure_codes')
+  const codes = await loadStructureCodeTables(db, structureCodes, data.reference)
   // Last: the masked views mirror whatever tables the steps above ended up creating.
+  onPhase?.('api')
   const api = await createApiSchema(db)
-  return { reference, geography, files, app, observations, api,
-    firstRun: reference.applied || geography.applied || files.applied || app.applied }
+  return { reference, geography, files, app, observations, codes, api,
+    firstRun: reference.applied || geography.applied || files.applied || app.applied || codes.applied }
+}
+
+/**
+ * PlkGap's own standard code lists: the ministry's published files first, then the enumerations
+ * `c_files_schema.description` spells out. These tables hold no user data, so each seed rebuilds
+ * them; the 43-file tables and the dictionary are never touched.
+ */
+export async function loadStructureCodeTables(db: PGlite,
+  catalog: { tables: ReferenceTable[] } = structureCodes,
+  upstream: ReferenceData = referenceData as ReferenceData) {
+  const version = createHash('sha256').update(JSON.stringify(catalog)).update(versionOf(upstream)).digest('hex')
+  const done = await initializedVersion(db, 'structure_codes')
+  if (done?.version === version) return { ...done, applied: false }
+  // The snapshot still owns the dictionary and the service-unit registry, and always will.
+  const tables = catalog.tables.filter((table) => !referenceTablesInUse.includes(table.name))
+  let total = 0
+  await db.transaction(async (tx) => {
+    for (const table of tables) {
+      if (!/^c_[a-z0-9_]+$/.test(table.name)) throw new Error('Invalid structure code table name')
+      const names = table.columns.map((column) => column.name)
+      if (names[0] !== 'code' || !names.includes('is_active')) throw new Error(`${table.name} is not a code list`)
+      const definition = names.map((name) => name === 'code' ? '"code" text PRIMARY KEY'
+        : name === 'is_active' ? '"is_active" integer NOT NULL DEFAULT 1'
+        : `${quote(name)} text NOT NULL DEFAULT ''`).join(', ')
+      // Rebuild only when the shape changed: the masked api views read these tables, and
+      // createApiSchema restores them in the same run because their structure moved with it.
+      const existing = await tx.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position`, [table.name])
+      if (existing.rows.length && existing.rows.map((row) => row.column_name).join(',') === names.join(',')) {
+        await tx.exec(`DELETE FROM ${quote(table.name)}`)
+      } else {
+        await tx.exec(`DROP TABLE IF EXISTS ${quote(table.name)} CASCADE; CREATE TABLE ${quote(table.name)} (${definition});`)
+      }
+      const target = `INSERT INTO ${quote(table.name)} (${names.map(quote).join(', ')}) VALUES `
+      const perBatch = Math.max(1, Math.floor(5000 / names.length))
+      for (let index = 0; index < table.rows.length; index += perBatch) {
+        const values: unknown[] = []
+        const placeholders = table.rows.slice(index, index + perBatch).map((row) => {
+          const slots = names.map((name) => { values.push(parameter(row[name])); return `$${values.length}` })
+          return `(${slots.join(', ')})`
+        })
+        await tx.query(target + placeholders.join(', '), values)
+      }
+      total += table.rows.length
+    }
+    await recordInit(tx, 'structure_codes', version, tables.length, total)
+  })
+  return { version, table_count: tables.length, row_count: total, applied: true }
 }
 
 export interface BoundaryData {
@@ -205,7 +276,8 @@ export async function loadGeographyTables(db: PGlite, data: GeographyData = geog
   const done = await initializedVersion(db, 'geography')
   if (done?.version === version) return { ...done, applied: false }
 
-  await db.exec(`DROP TABLE IF EXISTS c_province; DROP TABLE IF EXISTS c_district; DROP TABLE IF EXISTS c_subdistrict;
+  await db.exec(`DROP TABLE IF EXISTS c_province CASCADE; DROP TABLE IF EXISTS c_district CASCADE;
+    DROP TABLE IF EXISTS c_subdistrict CASCADE;
     CREATE TABLE c_province (changwat varchar(2) PRIMARY KEY, name_th text NOT NULL, name_en text NOT NULL);
     CREATE TABLE c_district (changwat varchar(2) NOT NULL, ampur varchar(2) NOT NULL, code varchar(4) NOT NULL,
       name_th text NOT NULL, name_en text NOT NULL, postal_code varchar(5) NOT NULL DEFAULT '',
@@ -236,8 +308,8 @@ export async function loadGeographyTables(db: PGlite, data: GeographyData = geog
   await insert('INSERT INTO c_subdistrict (changwat, ampur, tambon, code, name_th, name_en, postal_code) VALUES',
     data.subdistricts.map((row) => [row.changwat, row.ampur, row.tambon, row.code, row.nameTh, row.nameEn, row.postalCode]), 7)
 
-  // Boundaries come from the SUB-HDC PostGIS server and cover one province, so they are matched
-  // onto the country-wide name rows rather than loaded as tables of their own.
+  // Boundaries cover one province, so they are matched onto the country-wide name rows rather
+  // than loaded as tables of their own.
   const shape = async (sql: string, rows: { geom: unknown }[], keys: (row: never) => unknown[]) => {
     for (const row of rows) {
       await db.query(sql, [...keys(row as never), JSON.stringify(row.geom)])
@@ -266,7 +338,8 @@ export async function loadGeographyTables(db: PGlite, data: GeographyData = geog
 const APP_SCHEMA_VERSION = 'app@5'
 
 /**
- * Tables PlkGap owns itself, as opposed to the ones mirrored from SUB-HDC.
+ * PlkGap's own system tables (`observ_check`, alongside the `schema_init` register) and log tables
+ * (`import52files_log`, `structure_check_log`), as opposed to the code lists and the 52 files.
  * `import52files_log` accumulates one row per import run, so this is additive only — never dropped.
  */
 export async function createAppTables(db: PGlite) {
@@ -289,7 +362,7 @@ export async function createAppTables(db: PGlite) {
   CREATE INDEX IF NOT EXISTS idx_import52files_log_started ON import52files_log (started_at DESC);
 
   -- Purely derived from the imported rows, so unlike the import history it can be rebuilt.
-  DROP TABLE IF EXISTS structure_check_log;
+  DROP TABLE IF EXISTS structure_check_log CASCADE;
   CREATE TABLE structure_check_log (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     zip_name text NOT NULL,
@@ -332,24 +405,71 @@ export async function listImportLog(db: PGlite, limit = 200): Promise<ImportLogE
   return rows
 }
 
-interface DictionaryColumn { table: string; column: string; type: string; width: number; required: boolean; fieldDescription: string }
-interface RuleTest { column: string; rule: string; detail: string; level: string; test: string }
+/** Told after each file or rule finishes, so a long check can show where it is. */
+export type CheckReporter = (progress: Omit<CheckProgress, 'kind' | 'zipName'>) => void
+const step = (report: CheckReporter | undefined, done: number, total: number, name: string) =>
+  report?.({ done, total, step: name, percent: total ? Math.round((done / total) * 100) : 100 })
 
-/** Every rule the dictionary puts on one column, as SQL that is true when a row breaks it. */
-function ruleTests(entry: DictionaryColumn): RuleTest[] {
+interface DictionaryColumn { table: string; column: string; type: string; width: number; required: boolean
+  unitCode: boolean; fieldDescription: string }
+/**
+ * Fields holding a service-unit code, which is always the full width in digits. The dictionary
+ * leads with the words; ward, clinic, DRG and admission-number fields of the same width do not,
+ * so they keep the plain width rule instead.
+ */
+const UNIT_CODE_FIELD = `(caption LIKE 'รหัสหน่วยบริการ%' OR caption LIKE 'หน่วยบริการ%'
+  OR description LIKE 'รหัสหน่วยบริการ%')`
+interface RuleTest { column: string; rule: string; detail: string; level: string; test: string }
+const structureCodeReferences = new Map(structureCodes.bindings.map((binding) =>
+  [`${binding.table}.${binding.column}`, binding.reference]))
+/** The code list a field is judged by: an explicit binding first, then the naming convention. */
+const referenceFor = (table: string, column: string) =>
+  structureCodeReferences.get(`${table}.${column}`) ?? `c_${table}_${column}`
+/** The longest code each list holds, to spot a field the dictionary declares too narrow. */
+const longestCode = new Map(structureCodes.tables.map((table) =>
+  [table.name, table.rows.reduce((longest, row) => Math.max(longest, String(row.code).length), 0)]))
+
+async function structureReferenceTables(db: PGlite): Promise<Set<string>> {
+  const { rows } = await db.query<{ table_name: string }>(`SELECT table_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND LEFT(table_name, 2) = 'c_' AND column_name = 'code'`)
+  return new Set(rows.map((row) => row.table_name))
+}
+
+/** Per value: required -> width -> existing reference lookup; report only the first failure. */
+function ruleTests(entry: DictionaryColumn, references: Set<string>): RuleTest[] {
   const target = quote(entry.column)
+  const empty = `${target} IS NULL OR ${target} = ''`
   const tests: RuleTest[] = []
   if (entry.required) {
-    tests.push({ column: entry.column, rule: 'required', detail: 'ห้ามเป็นค่าว่าง', level: 'error', test: `${target} = ''` })
+    tests.push({ column: entry.column, rule: 'required', detail: 'ห้ามเป็นค่าว่าง', level: 'error', test: `(${empty})` })
   }
-  if (entry.width > 0) {
-    tests.push({ column: entry.column, rule: 'width', detail: `ความยาวเกิน ${entry.width} อักขระ`, level: 'error', test: `char_length(${target}) > ${entry.width}` })
+  const reference = referenceFor(entry.table, entry.column)
+  // Where the published list holds a code longer than the dictionary declares, the width is the
+  // stale part, not the data: EPI vaccine codes are C3 while the list holds HPVG91. Such a field
+  // is checked by its list alone — not empty, and present in the list — with no width rule, so
+  // the code rule must see every non-empty value including the long ones.
+  const listedWider = references.has(reference) && (longestCode.get(reference) ?? 0) > entry.width
+  // Every later rule skips what an earlier one already reported, so one value fails one rule.
+  const tooWide = entry.width > 0 && !listedWider ? ` OR char_length(${target}) > ${entry.width}` : ''
+  if (entry.width > 0 && !listedWider) {
+    tests.push({ column: entry.column, rule: 'width', detail: `ความยาวเกิน ${entry.width} อักขระ`, level: 'error',
+      test: `CASE WHEN ${empty} THEN FALSE ELSE char_length(${target}) > ${entry.width} END` })
   }
-  if (entry.type === 'N') {
-    tests.push({ column: entry.column, rule: 'number', detail: 'ต้องเป็นตัวเลข', level: 'warning', test: `${target} <> '' AND ${target} !~ '^-?[0-9]+([.][0-9]+)?$'` })
+  if (entry.unitCode && entry.width > 0) {
+    tests.push({ column: entry.column, rule: 'unitcode', level: 'error',
+      detail: `รหัสหน่วยบริการต้องเป็นตัวเลข ${entry.width} หลัก`,
+      // Empty values belong to the required rule, over-long ones to the width rule.
+      test: `CASE WHEN ${empty}${tooWide} THEN FALSE ELSE ${target} !~ '^[0-9]{${entry.width}}$' END` })
   }
-  if ((entry.type === 'D' || entry.type === 'DT') && entry.width > 0) {
-    tests.push({ column: entry.column, rule: 'date', detail: `รูปแบบต้องเป็นตัวเลข ${entry.width} หลัก`, level: 'error', test: `${target} <> '' AND ${target} !~ '^[0-9]{${entry.width}}$'` })
+  if (references.has(reference)) {
+    tests.push({ column: entry.column, rule: 'code', level: 'error',
+      // A code the current standard does not list is wrong even when it once existed: the value
+      // has a replacement, so say to fix it rather than which table failed to match.
+      detail: 'ไม่ตรงตามรหัสมาตรฐาน',
+      // Keep text comparison (01 differs from 1). Empty values belong to the required rule.
+      test: `CASE WHEN ${empty}${tooWide} THEN FALSE ELSE NOT EXISTS (
+        SELECT 1 FROM ${quote(reference)} AS valid_code
+        WHERE valid_code.code::text = ${quote(entry.table)}.${target}) END` })
   }
   return tests
 }
@@ -360,20 +480,22 @@ const importedFromZip = 'log_import_id IN (SELECT id FROM import52files_log WHER
 
 /**
  * Checks the rows imported from one zip against the real 43-file data dictionary
- * (`c_files_schema`): required fields, declared width, numeric fields and date formats.
+ * (`c_files_schema`): required values, then width, then an existing reference code list.
  * Scope is the zip file name, so every run that imported that file counts — re-importing the
  * same zip adds no rows, and the check still sees the rows the first run brought in.
  * The result replaces the zip's previous one in `structure_check_log`.
  */
 export async function checkImportStructure(db: PGlite, zipName: string,
-  structure: FileStructure = fileStructure as FileStructure): Promise<StructureCheckResult> {
+  report?: CheckReporter, structure: FileStructure = fileStructure as FileStructure): Promise<StructureCheckResult> {
   const dictionary = await db.query<DictionaryColumn>(`
     SELECT LOWER(table_name) AS table, LOWER(name) AS column, type,
       COALESCE(NULLIF(description, ''), caption, '') AS "fieldDescription",
+      ${UNIT_CODE_FIELD} AS "unitCode",
       -- width is usually plain digits, but the dictionary has the odd '13.00'
       CASE WHEN width ~ '^[0-9]+' THEN SPLIT_PART(width, '.', 1)::int ELSE 0 END AS width,
       not_null = 'Y' AS required
     FROM c_files_schema WHERE is_active = 1`)
+  const references = await structureReferenceTables(db)
   const byTable = new Map<string, DictionaryColumn[]>()
   for (const entry of dictionary.rows) {
     if (!byTable.has(entry.table)) byTable.set(entry.table, [])
@@ -383,12 +505,14 @@ export async function checkImportStructure(db: PGlite, zipName: string,
   const findings: StructureFinding[] = []
   let rows = 0
   let rules = 0
+  let done = 0
   for (const table of structure.tables) {
+    step(report, done++, structure.tables.length, table.name.toUpperCase())
     const columns = (byTable.get(table.name) ?? [])
       .filter((entry) => table.columns.some((column) => column.name === entry.column))
     if (!columns.length) continue
 
-    const checks = columns.flatMap(ruleTests)
+    const checks = columns.flatMap((entry) => ruleTests(entry, references))
     if (!checks.length) continue
 
     const counters = checks.map((check, index) => `SUM(CASE WHEN ${check.test} THEN 1 ELSE 0 END)::int AS c${index}`)
@@ -400,12 +524,15 @@ export async function checkImportStructure(db: PGlite, zipName: string,
     rules += checks.length
     checks.forEach((check, index) => {
       const found = summary[`c${index}`] ?? 0
+      const reference = referenceFor(table.name, check.column)
       if (found > 0) findings.push({ tableName: table.name, columnName: check.column,
         fieldDescription: columns.find((entry) => entry.column === check.column)?.fieldDescription ?? '',
-        rule: check.rule, detail: check.detail, tableRows: summary.total, found, level: check.level })
+        rule: check.rule, detail: check.detail, tableRows: summary.total, found, level: check.level,
+        ...(references.has(reference) ? { reference } : {}) })
     })
   }
 
+  step(report, structure.tables.length, structure.tables.length, 'สรุปผล')
   await db.query('DELETE FROM structure_check_log WHERE zip_name = $1', [zipName])
   const stored = findings.length ? findings : [
     { tableName: '', columnName: '', rule: 'passed', detail: 'ผ่านทุกเกณฑ์', tableRows: 0, found: 0, level: 'passed' },
@@ -424,23 +551,32 @@ export async function checkImportStructure(db: PGlite, zipName: string,
   return await structureResult(db, zipName) ?? { zipName, rows, rules, checkedAt: new Date().toISOString(), findings }
 }
 
+/** The column that names, per record, which rule the value broke. */
+export const RULE_COLUMN = 'เกณฑ์'
+
 /**
- * The actual rows behind one finding: the file's key columns plus the offending value, so the
- * finding can be traced back to real records. Capped to a readable sample.
+ * The actual rows behind a field's findings: the file's key columns, the offending value and the
+ * rule each record broke, so a finding can be traced back to real records. Capped to a readable
+ * sample. Without `rule` it covers every rule of that field — the rules are mutually exclusive per
+ * value, so each record still names exactly one.
  */
 export async function structureFailingRows(db: PGlite, zipName: string, tableName: string,
-  columnName: string, rule: string, limit = 100,
+  columnName: string, rule = '', limit = 100,
   structure: FileStructure = fileStructure as FileStructure): Promise<FailingRows> {
   const definition = structure.tables.find((entry) => entry.name === tableName)
   if (!definition) throw new Error(`ไม่รู้จักแฟ้ม ${tableName}`)
   const { rows: dictionary } = await db.query<DictionaryColumn>(`
     SELECT LOWER(table_name) AS table, LOWER(name) AS column, type,
       CASE WHEN width ~ '^[0-9]+' THEN SPLIT_PART(width, '.', 1)::int ELSE 0 END AS width,
-      not_null = 'Y' AS required
+      not_null = 'Y' AS required, ${UNIT_CODE_FIELD} AS "unitCode"
     FROM c_files_schema
     WHERE is_active = 1 AND LOWER(table_name) = $1 AND LOWER(name) = $2`, [tableName, columnName])
-  const test = dictionary.flatMap(ruleTests).find((entry) => entry.rule === rule)
-  if (!test) throw new Error(`ไม่รู้จักเกณฑ์ ${rule} ของ ${tableName}.${columnName}`)
+  const references = await structureReferenceTables(db)
+  const all = dictionary.flatMap((entry) => ruleTests(entry, references))
+  const tests = rule ? all.filter((entry) => entry.rule === rule) : all
+  if (!tests.length) throw new Error(rule
+    ? `ไม่รู้จักเกณฑ์ ${rule} ของ ${tableName}.${columnName}`
+    : `ไม่มีเกณฑ์สำหรับ ${tableName}.${columnName}`)
 
   // Standing columns first, so a row can always be traced back: who, which visit, and when.
   // `seq` identifies an outpatient visit and `an` an admission; `service` for one has a primary key
@@ -448,17 +584,23 @@ export async function structureFailingRows(db: PGlite, zipName: string, tableNam
   const standing = ['hospcode', 'pid', 'seq', 'an', countingColumn(definition)]
     .filter((name) => definition.columns.some((column) => column.name === name))
   const shown = [...new Set([...standing, ...definition.primaryKey, columnName])]
+  // Rule wording travels as a parameter, never inlined, and the CASE follows the same order the
+  // check itself reports in: the first rule a value breaks is the one it is named by.
+  const failed = tests.map((test) => `(${test.test})`).join(' OR ')
+  const named = `CASE ${tests.map((test, index) => `WHEN ${test.test} THEN $${index + 2}`).join(' ')} END`
+  const values = [zipName, ...tests.map((test) => test.detail)]
   const { rows: sample } = await db.query<Record<string, string>>(
-    `SELECT ${shown.map(quote).join(', ')} FROM ${quote(tableName)}
-     WHERE ${importedFromZip} AND ${test.test} LIMIT ${limit}`, [zipName])
+    `SELECT ${shown.map(quote).join(', ')}, ${named} AS ${quote(RULE_COLUMN)}
+     FROM ${quote(tableName)} WHERE ${importedFromZip} AND (${failed}) LIMIT ${limit}`, values)
   const { rows: counted } = await db.query<{ n: number }>(
-    `SELECT COUNT(*)::int AS n FROM ${quote(tableName)} WHERE ${importedFromZip} AND ${test.test}`, [zipName])
+    `SELECT COUNT(*)::int AS n FROM ${quote(tableName)} WHERE ${importedFromZip} AND (${failed})`, [zipName])
+  const columns = [...shown, RULE_COLUMN]
   return {
     tableName,
     columnName,
-    detail: test.detail,
-    columns: shown,
-    rows: sample.map((row) => shown.map((name) => String(row[name] ?? ''))),
+    detail: tests.length === 1 ? tests[0].detail : `ไม่ผ่าน ${tests.length} เกณฑ์`,
+    columns,
+    rows: sample.map((row) => columns.map((name) => String(row[name] ?? ''))),
     total: counted[0]?.n ?? 0,
   }
 }
@@ -518,7 +660,7 @@ function observationRules(): {
       id: 'prename-sex', tableName: 'person', level: 'warning',
       detail: 'คำนำหน้าชื่อไม่สอดคล้องกับเพศ',
       columns: ['hospcode', 'pid', 'prename', 'prename_full', 'sex', 'expected_sex'],
-      sql: `SELECT p.hospcode, p.pid, p.prename, r.prename_full, p.sex, r.sex AS expected_sex,
+      sql: `SELECT p.hospcode, p.pid, p.prename, r.description AS prename_full, p.sex, r.sex AS expected_sex,
         (p.sex IN ('1', '2') AND r.sex IN ('1', '2')) AS eligible,
         (p.sex <> r.sex) AS failed
         FROM person p LEFT JOIN c_person_prename r ON r.code = p.prename AND r.is_active = 1
@@ -588,12 +730,17 @@ function observationRules(): {
       id: 'duplicate-cid', tableName: 'person', level: 'error',
       detail: 'เลขบัตรประชาชนเดียวกันถูกใช้หลาย PID ในหน่วยบริการเดียวกัน',
       columns: ['hospcode', 'pid', 'cid', 'name', 'lname'],
-      // Counted inside the zip only: a PID registered twice across separate imports is not seen here.
+      // Counted across every import of the same service unit, so a CID re-registered under a new
+      // PID in a later zip is still one person; a different HOSPCODE is a different register and
+      // never counts. Grouped once rather than tested per row, so a large PERSON stays a single scan.
       sql: `SELECT p.hospcode, p.pid, p.cid, p.name, p.lname,
         (p.cid ~ '^[0-9]{13}$') AS eligible,
-        COUNT(*) FILTER (WHERE p.cid ~ '^[0-9]{13}$')
-          OVER (PARTITION BY p.hospcode, p.cid) > 1 AS failed
-        FROM person p WHERE p.${importedFromZip}`,
+        COALESCE(same_cid.pids, 0) > 1 AS failed
+        FROM person p LEFT JOIN (
+          SELECT hospcode, cid, COUNT(DISTINCT pid) AS pids FROM person
+          WHERE cid ~ '^[0-9]{13}$' GROUP BY hospcode, cid) same_cid
+          ON same_cid.hospcode = p.hospcode AND same_cid.cid = p.cid
+        WHERE p.${importedFromZip}`,
     },
     {
       id: 'death-without-discharge', tableName: 'death', level: 'error',
@@ -659,14 +806,19 @@ export async function setObservationRuleActive(db: PGlite, ruleId: string, activ
 }
 
 /** Read-only checks scoped to imported rows; PERSON lookups may come from an earlier zip. */
-export async function checkObservations(db: PGlite, zipName: string): Promise<ObservationResult> {
+export async function checkObservations(db: PGlite, zipName: string,
+  report?: CheckReporter): Promise<ObservationResult> {
   await syncObservationRules(db)
   const compiled = new Map(observationRules().map((rule) => [rule.id, rule]))
   const findings: ObservationFinding[] = []
   // The register decides which rules run and in what order; the code decides what each one asks.
-  for (const registered of await listObservationRules(db)) {
+  const registry = await listObservationRules(db)
+  const active = registry.filter((registered) => registered.active && compiled.has(registered.id))
+  let done = 0
+  for (const registered of registry) {
     const rule = compiled.get(registered.id)
     if (!rule || !registered.active) continue
+    step(report, done++, active.length, registered.tableName.toUpperCase())
     const result = await db.query<{ checked: number; skipped: number; found: number }>(`
       WITH candidates AS (${rule.sql}) SELECT
         COUNT(*) FILTER (WHERE eligible)::int AS checked,
@@ -675,6 +827,7 @@ export async function checkObservations(db: PGlite, zipName: string): Promise<Ob
     findings.push({ id: rule.id, tableName: registered.tableName, detail: registered.detail,
       level: registered.level, ...result.rows[0] })
   }
+  step(report, active.length, active.length, 'สรุปผล')
   return { zipName, checkedAt: new Date().toISOString(), findings }
 }
 
@@ -705,17 +858,43 @@ export async function structureResult(db: PGlite, zipName: string): Promise<Stru
           WHERE LOWER(d.table_name) = l.table_name AND LOWER(d.name) = l.column_name AND d.is_active = 1
           ORDER BY d.no LIMIT 1), '') AS "fieldDescription"
       FROM structure_check_log l WHERE zip_name = $1
-      ORDER BY CASE level WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, found DESC, table_name, column_name`,
+      ORDER BY table_name, column_name,
+        CASE rule WHEN 'required' THEN 0 WHEN 'width' THEN 1 WHEN 'unitcode' THEN 2 WHEN 'code' THEN 3 ELSE 4 END, found DESC`,
     [zipName])
   if (!rows.length) return null
+  // The log stores the finding, not the list it came from; both reads derive that the same way.
+  const references = await structureReferenceTables(db)
   return {
     zipName,
     rows: rows[0].rowCount,
     rules: rows[0].ruleCount,
     checkedAt: rows[0].checkedAt,
-    findings: rows.filter((row) => row.rule !== 'passed').map(({ tableName, columnName, fieldDescription, rule, detail, tableRows, found, level }) =>
-      ({ tableName, columnName, fieldDescription, rule, detail, tableRows, found, level })),
+    findings: rows.filter((row) => row.rule !== 'passed').map(({ tableName, columnName, fieldDescription, rule, detail, tableRows, found, level }) => {
+      const reference = referenceFor(tableName, columnName)
+      return { tableName, columnName, fieldDescription, rule, detail, tableRows, found, level,
+        ...(references.has(reference) ? { reference } : {}) }
+    }),
   }
+}
+
+/**
+ * One whole `c_*` code list, so a finding can show what the field is allowed to contain.
+ * Only a real code list is readable: the name has to be a `c_*` table that carries a `code` column.
+ */
+export async function referenceCodeList(db: PGlite, table: string): Promise<ReferenceCodeList> {
+  const name = table.toLowerCase()
+  if (!/^c_[a-z0-9_]+$/.test(name)) throw new Error(`ไม่รู้จักตาราง ${table}`)
+  const { rows: columns } = await db.query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position`, [name])
+  if (!columns.length || !columns.some((column) => column.column_name === 'code')) {
+    throw new Error(`ไม่รู้จักตาราง ${table}`)
+  }
+  const names = columns.map((column) => column.column_name)
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT ${names.map(quote).join(', ')} FROM ${quote(name)} ORDER BY code`)
+  return { table: name, columns: names,
+    rows: rows.map((row) => names.map((column) => row[column] === null ? '' : String(row[column]))) }
 }
 
 /**
@@ -882,20 +1061,28 @@ function parameter(value: unknown) {
 }
 
 /**
- * Mirrors the SUB-HDC `c_*` reference (code) tables into this database, structure and rows,
- * from `reference/c-tables.json` (produced by `scripts/pull-reference-tables.mjs`).
- * These tables are pure copies of upstream code lists, so a newer pull replaces them wholesale.
+ * Loads the `c_*` reference tables into this database, structure and rows, from
+ * `reference/c-tables.json` (produced by `scripts/pull-reference-tables.mjs`).
+ * These tables are pure copies of upstream lists, so a newer pull replaces them wholesale.
  */
 export async function loadReferenceTables(db: PGlite, data: ReferenceData = referenceData as ReferenceData) {
   await ensureInitTable(db)
-  const version = versionOf(data)
+  const kept = data.tables.filter((table) => referenceTablesInUse.includes(table.name))
+  // Retired means nobody owns the name any more: not this list, and not the code catalog either,
+  // which seeds its own tables under names the snapshot also happens to carry.
+  const retired = data.tables.filter((table) => !referenceTablesInUse.includes(table.name)
+    && !structureCodes.tables.some((entry) => entry.name === table.name))
+  const version = `${versionOf(data)}#${REFERENCE_TABLES_REVISION}`
   const done = await initializedVersion(db, 'reference')
   if (done?.version === version) return { ...done, applied: false }
 
+  // Databases seeded before the switch still hold the snapshot's code lookups; the catalog owns those
+  // names now, and loadStructureCodeTables recreates the ones it defines later in this run.
+  for (const table of retired) await db.exec(`DROP TABLE IF EXISTS ${quote(table.name)} CASCADE`)
   let total = 0
-  for (const table of data.tables) {
+  for (const table of kept) {
     const definition = table.columns.map((column) => `${quote(column.name)} ${postgresType(column.type)}`).join(', ')
-    await db.exec(`DROP TABLE IF EXISTS ${quote(table.name)}; CREATE TABLE ${quote(table.name)} (${definition});`)
+    await db.exec(`DROP TABLE IF EXISTS ${quote(table.name)} CASCADE; CREATE TABLE ${quote(table.name)} (${definition});`)
     if (!table.rows.length) continue
     const names = table.columns.map((column) => column.name)
     const target = `INSERT INTO ${quote(table.name)} (${names.map(quote).join(', ')}) VALUES `
@@ -911,18 +1098,18 @@ export async function loadReferenceTables(db: PGlite, data: ReferenceData = refe
     }
     total += table.rows.length
   }
-  await recordInit(db, 'reference', version, data.tables.length, total)
-  return { version, table_count: data.tables.length, row_count: total, applied: true }
+  await recordInit(db, 'reference', version, kept.length, total)
+  return { version, table_count: kept.length, row_count: total, applied: true }
 }
 
 /**
- * Our own revision of the 52-table schema, on top of whatever SUB-HDC structure file is in use.
+ * Our own revision of the 52-table schema, on top of whatever structure file is in use.
  * Bump it when the DDL below changes so the change is applied once on the next start.
  */
 const FILES_SCHEMA_REVISION = 4
 
 /**
- * `log_import_id` is SUB-HDC's own column on every one of the 52 files, and PlkGap uses it as a
+ * `log_import_id` is a column the 43-file structure carries on all 52 files, and PlkGap uses it as a
  * plain stamp: the id of the `import52files_log` run a row came from, joined on demand.
  * Deliberately no foreign key and no index — nothing to slow a bulk import down.
  * Revision 2 briefly added both, so they are dropped here for databases that already got them.
@@ -942,7 +1129,7 @@ function fileColumnType(column: FileColumn) {
 
 /**
  * MariaDB reports defaults as expressions: "''" for the empty string, "NULL" for none.
- * SUB-HDC has one NOT NULL text column with no default at all (`service.chiefcomp`); MySQL lets an
+ * One NOT NULL text column has no default at all (`service.chiefcomp`); MySQL lets an
  * insert omit it, PostgreSQL does not, so give every NOT NULL text column the same empty default.
  */
 function fileColumnDefault(column: FileColumn) {
@@ -958,9 +1145,8 @@ function fileColumnDefinition(column: FileColumn) {
 }
 
 /**
- * Creates the 52 standard 43-file tables with the same structure as SUB-HDC — columns, types,
- * NOT NULL/defaults, primary keys and secondary indexes — and no rows. Structure comes from
- * `reference/f43-tables.json`.
+ * Creates the 52 standard 43-file tables with the structure `reference/f43-tables.json` defines —
+ * columns, types, NOT NULL/defaults, primary keys and secondary indexes — and no rows.
  * These tables hold imported data, so this is additive only: it creates what is missing and
  * never drops a table, a column or the rows inside them.
  */
@@ -1144,7 +1330,12 @@ export async function createApiSchema(db: PGlite) {
   const version = 'api@' + createHash('sha1')
     .update(JSON.stringify([blockedApiColumns, MASK, columns])).digest('hex').slice(0, 12)
   const done = await initializedVersion(db, 'api')
-  if (done?.version === version) return { ...done, applied: false }
+  // Rebuilding a reference table drops its view along with it, and the column list can come back
+  // identical, so the digest alone is not proof the views are still there.
+  const { rows: present } = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM information_schema.views WHERE table_schema = '${API_SCHEMA}'`)
+  const expected = new Set(columns.map((row) => row.table_name)).size
+  if (done?.version === version && present[0].n === expected) return { ...done, applied: false }
 
   await db.exec(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${API_ROLE}') THEN

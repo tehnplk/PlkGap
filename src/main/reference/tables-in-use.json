@@ -1,0 +1,4 @@
+{
+  "note": "What PlkGap still seeds from the SUB-HDC snapshot. Its c_* code lookups are not seeded: the standard code lists come from the ministry's published files and c_files_schema.description, through structure-codes.json.",
+  "tables": ["c_file", "c_files_desc", "c_files_schema", "c_hospital", "c_hostype"]
+}

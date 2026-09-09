@@ -1,32 +1,40 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { createSso } from './sso'
+import { createSsoStore } from './sso-store'
+import ssoConfig from './sso-config.json'
 import { autoUpdater } from 'electron-updater'
 import { createUpdater } from './updater'
+import { createSplash } from './splash'
 import { basename, join } from 'node:path'
 import { stat } from 'node:fs/promises'
-import { startApiServer } from './server'
-import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
+import { apiPort, startApiServer } from './server'
+import { createGateway } from './gateway'
+import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, referenceCodeList, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
 import { checkImportZip, eachZipTextEntry, parsePipeFile } from './Import52Files'
 import type { IpcMainInvokeEvent } from 'electron'
+import type { CheckProgress } from '../shared/api'
 import { checkObservations, observationRows } from './database'
 
 let window: BrowserWindow | null = null
 let db: Awaited<ReturnType<typeof openDatabase>> | undefined
-let api: Awaited<ReturnType<typeof startApiServer>> | undefined
+let api: ReturnType<typeof createGateway> | undefined
 let closing = false
 let confirmedExit = false
 let confirming = false
 let activeImports = 0
 let updater: ReturnType<typeof createUpdater> | undefined
+let sso: ReturnType<typeof createSso> | undefined
 const testData = process.env.PLKGAP_TEST_DATA_DIR
 if (testData) app.setPath('userData', testData)
 
-function createWindow() {
+function createWindow(beforeShow?: () => Promise<void> | void) {
   window = new BrowserWindow({
     width: 1100,
     height: 760,
     minWidth: 640,
     minHeight: 480,
     frame: false,
+    show: false,
     backgroundColor: '#f4f6fa',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -37,6 +45,14 @@ function createWindow() {
   })
   window.maximize()
   const mainWindow = window
+  // The splash goes away first, then the app window takes the screen and the keyboard.
+  mainWindow.once('ready-to-show', () => {
+    void Promise.resolve(beforeShow?.()).catch(console.error).finally(() => {
+      if (mainWindow.isDestroyed()) return
+      mainWindow.show()
+      mainWindow.focus()
+    })
+  })
   const publishWindowState = () => {
     if (!mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('window:maximized', mainWindow.isMaximized())
   }
@@ -82,14 +98,44 @@ if (!app.requestSingleInstanceLock()) {
     window?.focus()
   })
   app.whenReady().then(async () => {
+    // Up before the database opens: first start seeds the whole catalog and takes a while.
+    const splash = createSplash(app.getVersion())
     const path = join(app.getPath('userData'), 'plkgap-pglite')
-    db = await openDatabase(path)
-    if (closing) { await db.close(); app.exit(); return }
-    api = await startApiServer(db)
+    try {
+      db = await openDatabase(path, splash.phase)
+    } catch (error) {
+      void splash.close(0)
+      throw error
+    }
+    if (closing) { void splash.close(0); await db.close(); app.exit(); return }
+    splash.phase('พร้อมใช้งาน')
+    api = createGateway(app.getPath('userData'), apiPort, () => startApiServer(db!))
+    await api.restore()
     const authorizedWindow = (event: IpcMainInvokeEvent) => {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Unauthorized sender')
       return window
     }
+    ipcMain.handle('gateway:state', (event) => { authorizedWindow(event); return api!.state() })
+    ipcMain.handle('gateway:set-enabled', (event, enabled: boolean) => {
+      authorizedWindow(event)
+      if (closing) throw new Error('Application is closing')
+      return api!.setEnabled(enabled)
+    })
+    const testIssuer = !app.isPackaged && testData ? process.env.PLKGAP_TEST_SSO_ISSUER : undefined
+    sso = createSso({
+      issuer: testIssuer ?? ssoConfig.issuer,
+      clientId: testIssuer ? 'plkgap-test-client' : ssoConfig.clientId,
+      allowLoopbackIssuer: Boolean(testIssuer),
+      openBrowser: (url) => shell.openExternal(url),
+      store: createSsoStore(app.getPath('userData')),
+      publish: (state) => {
+        if (window && !window.webContents.isDestroyed()) window.webContents.send('sso:state', state)
+      },
+      onSignedIn: () => { if (window?.isMinimized()) window.restore(); window?.focus() },
+    })
+    ipcMain.handle('sso:state', (event) => { authorizedWindow(event); return sso!.snapshot() })
+    ipcMain.handle('sso:login', (event) => { authorizedWindow(event); return sso!.login() })
+    ipcMain.handle('sso:logout', (event) => { authorizedWindow(event); return sso!.logout() })
     updater = createUpdater(autoUpdater, app.isPackaged && process.platform === 'win32' && !testData, (state) => {
       if (window && !window.webContents.isDestroyed()) window.webContents.send('update:state', state)
       // An installer launch failure may happen after shutdown. Reopen the app instead
@@ -125,7 +171,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (error) {
           closing = false
           // If API shutdown succeeded but the database could not close, restore access.
-          if (db && !db.closed) api = await startApiServer(db)
+          if (db && !db.closed) await api?.resume()
           throw error
         } finally { confirming = false }
       })
@@ -180,13 +226,20 @@ if (!app.requestSingleInstanceLock()) {
       const list = Array.isArray(years) ? years.map(Number).filter(Number.isFinite) : []
       return countByFiscalYears(db!, String(table ?? ''), list)
     })
+    // Both checks run for a while on the main process, so they report where they are as they go.
+    const reporter = (target: BrowserWindow, kind: 'structure' | 'observations', zipName: string) =>
+      (progress: Omit<CheckProgress, 'kind' | 'zipName'>) => {
+        if (!target.isDestroyed()) target.webContents.send('check:progress', { ...progress, kind, zipName })
+      }
     ipcMain.handle('structure:check', (event, zipName: unknown) => {
-      authorizedWindow(event)
-      return checkImportStructure(db!, String(zipName ?? ''))
+      const target = authorizedWindow(event)
+      const zip = String(zipName ?? '')
+      return checkImportStructure(db!, zip, reporter(target, 'structure', zip))
     })
     ipcMain.handle('observations:check', (event, zipName: unknown) => {
-      authorizedWindow(event)
-      return checkObservations(db!, String(zipName ?? ''))
+      const target = authorizedWindow(event)
+      const zip = String(zipName ?? '')
+      return checkObservations(db!, zip, reporter(target, 'observations', zip))
     })
     ipcMain.handle('observations:rows', (event, zipName: unknown, rule: unknown) => {
       authorizedWindow(event)
@@ -206,7 +259,13 @@ if (!app.requestSingleInstanceLock()) {
     })
     ipcMain.handle('structure:failing-rows', (event, zipName: unknown, tableName: unknown, columnName: unknown, rule: unknown) => {
       authorizedWindow(event)
-      return structureFailingRows(db!, String(zipName ?? ''), String(tableName ?? ''), String(columnName ?? ''), String(rule ?? ''))
+      // No rule means every rule of that field; each record still names the one it broke.
+      return structureFailingRows(db!, String(zipName ?? ''), String(tableName ?? ''), String(columnName ?? ''),
+        rule === undefined || rule === null ? '' : String(rule))
+    })
+    ipcMain.handle('reference:codes', (event, table: unknown) => {
+      authorizedWindow(event)
+      return referenceCodeList(db!, String(table ?? ''))
     })
     ipcMain.handle('import:log', (event) => {
       authorizedWindow(event)
@@ -251,7 +310,8 @@ if (!app.requestSingleInstanceLock()) {
       return { runId, files, rowCount }
       } finally { activeImports -= 1 }
     })
-    createWindow()
+    createWindow(() => splash.close())
+    void sso.restore()
     updater.start()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -265,6 +325,7 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.on('before-quit', (event) => {
     updater?.stop()
+    sso?.stop()
     if (!db || db.closed) return
     event.preventDefault()
     if (closing) return
@@ -283,6 +344,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('observations:set-active')
     ipcMain.removeHandler('structure:result')
     ipcMain.removeHandler('structure:failing-rows')
+    ipcMain.removeHandler('reference:codes')
     ipcMain.removeHandler('import:log')
     ipcMain.removeHandler('import:check-file')
     ipcMain.removeHandler('import:run')

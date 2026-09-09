@@ -2,6 +2,16 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
+  gatewayState: () => ipcRenderer.invoke('gateway:state'),
+  setGatewayEnabled: (enabled) => ipcRenderer.invoke('gateway:set-enabled', enabled),
+  ssoState: () => ipcRenderer.invoke('sso:state'),
+  ssoLogin: () => ipcRenderer.invoke('sso:login'),
+  ssoLogout: () => ipcRenderer.invoke('sso:logout'),
+  onSsoState: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state)
+    ipcRenderer.on('sso:state', listener)
+    return () => ipcRenderer.removeListener('sso:state', listener)
+  },
   updateState: () => ipcRenderer.invoke('update:state'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
@@ -25,6 +35,7 @@ const api: AppApi = {
   structureResult: (zipName) => ipcRenderer.invoke('structure:result', zipName),
   failingRows: (zipName, tableName, columnName, rule) =>
     ipcRenderer.invoke('structure:failing-rows', zipName, tableName, columnName, rule),
+  referenceCodes: (table) => ipcRenderer.invoke('reference:codes', table),
   listImportLog: () => ipcRenderer.invoke('import:log'),
   checkImportFile: (path) => ipcRenderer.invoke('import:check-file', path),
   runImport: (path) => ipcRenderer.invoke('import:run', path),
@@ -32,6 +43,11 @@ const api: AppApi = {
     const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]) => callback(progress)
     ipcRenderer.on('import:progress', listener)
     return () => ipcRenderer.removeListener('import:progress', listener)
+  },
+  onCheckProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]) => callback(progress)
+    ipcRenderer.on('check:progress', listener)
+    return () => ipcRenderer.removeListener('check:progress', listener)
   },
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),

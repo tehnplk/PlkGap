@@ -4,7 +4,9 @@
   "description": "Electron React Vite desktop app with embedded PostGIS",
   "main": "out/main/index.js",
   "scripts": {
-    "test": "npm run test:updater && tsx scripts/test-database.ts && node scripts/test-electron.mjs",
+    "test": "npm run test:updater && npm run test:sso && npm run test:gateway && tsx scripts/test-database.ts && node scripts/test-electron.mjs",
+    "test:gateway": "tsx scripts/test-gateway.ts",
+    "test:sso": "tsx scripts/test-sso.ts",
     "dev": "node scripts/run-electron-vite.cjs dev",
     "start": "node scripts/run-electron-vite.cjs preview",
     "typecheck": "tsc --noEmit",
@@ -21,6 +23,7 @@
     "@electric-sql/pglite": "^0.5.8",
     "@electric-sql/pglite-postgis": "^0.2.8",
     "electron-updater": "^6.8.9",
+    "jose": "^6.2.12",
     "leaflet": "^1.9.4",
     "leaflet.markercluster": "^1.5.3",
     "react": "^19.2.8",
@@ -43,6 +46,7 @@
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
+    "xlsx": "^0.18.5",
     "yazl": "^3.3.1"
   },
   "private": true,

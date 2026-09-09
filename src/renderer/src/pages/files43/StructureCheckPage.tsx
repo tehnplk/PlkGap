@@ -1,12 +1,42 @@
 import { SortableTable } from '../../SortableTable'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
-import type { FailingRows, ImportLogEntry, StructureCheckResult, StructureFinding } from '../../../../shared/api'
+import type { FailingRows, ImportLogEntry, ReferenceCodeList, StructureCheckResult, StructureFinding } from '../../../../shared/api'
 import { Icon } from '../../Icon'
 
 const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 const megabytes = (bytes: number) => (bytes / 1048576).toFixed(2)
-const levelLabel: Record<string, string> = { error: 'ไม่ผ่าน', warning: 'ควรแก้ไข' }
+
+/** One row of the result grid: every rule that failed on the same field, counted together. */
+interface FieldSummary {
+  tableName: string
+  columnName: string
+  fieldDescription: string
+  reference?: string
+  tableRows: number
+  failed: number
+}
+
+/**
+ * Rules are mutually exclusive per value — a value is reported by the first rule it breaks — so
+ * the failing rows of one field add up without counting a row twice.
+ */
+function summarize(findings: StructureFinding[]): FieldSummary[] {
+  const fields = new Map<string, FieldSummary>()
+  for (const finding of findings) {
+    const key = `${finding.tableName}.${finding.columnName}`
+    const field = fields.get(key)
+    if (!field) {
+      fields.set(key, { tableName: finding.tableName, columnName: finding.columnName,
+        fieldDescription: finding.fieldDescription, reference: finding.reference,
+        tableRows: finding.tableRows, failed: finding.found })
+      continue
+    }
+    field.failed += finding.found
+    field.reference ??= finding.reference
+  }
+  return [...fields.values()]
+}
 
 export function StructureCheckPage() {
   const [log, setLog] = useState<ImportLogEntry[]>([])
@@ -15,9 +45,13 @@ export function StructureCheckPage() {
   const [level, setLevel] = useState<'all' | 'error' | 'warning'>('all')
   const [file, setFile] = useState('all')
   const [failing, setFailing] = useState<FailingRows | null>(null)
+  const [codes, setCodes] = useState<ReferenceCodeList | null>(null)
+  const [codesField, setCodesField] = useState('')
   const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [codesOffset, setCodesOffset] = useState({ x: 0, y: 0 })
   const [error, setError] = useState('')
   const failingDialog = useRef<HTMLDialogElement>(null)
+  const codesDialog = useRef<HTMLDialogElement>(null)
 
   const reload = useCallback(() => {
     window.api.listImportLog()
@@ -32,15 +66,21 @@ export function StructureCheckPage() {
     if (failing && !dialog.open) { setOffset({ x: 0, y: 0 }); dialog.showModal() }
     if (!failing && dialog.open) dialog.close()
   }, [failing])
+  useEffect(() => {
+    const dialog = codesDialog.current
+    if (!dialog) return
+    if (codes && !dialog.open) { setCodesOffset({ x: 0, y: 0 }); dialog.showModal() }
+    if (!codes && dialog.open) dialog.close()
+  }, [codes])
 
-  function moveModal(event: PointerEvent<HTMLElement>) {
+  function moveModal(event: PointerEvent<HTMLElement>, move = setOffset, from = offset) {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return
     event.preventDefault()
     const target = event.currentTarget
     target.setPointerCapture(event.pointerId)
-    const startX = event.clientX - offset.x
-    const startY = event.clientY - offset.y
-    const onMove = (next: globalThis.PointerEvent) => setOffset({ x: next.clientX - startX, y: next.clientY - startY })
+    const startX = event.clientX - from.x
+    const startY = event.clientY - from.y
+    const onMove = (next: globalThis.PointerEvent) => move({ x: next.clientX - startX, y: next.clientY - startY })
     const stop = () => {
       target.removeEventListener('pointermove', onMove)
       target.removeEventListener('pointerup', stop)
@@ -57,6 +97,7 @@ export function StructureCheckPage() {
     setCheckingZip(zipName)
     setStructure(null)
     setFailing(null)
+    setCodes(null)
     setLevel('all')
     setFile('all')
     setError('')
@@ -69,11 +110,22 @@ export function StructureCheckPage() {
     }
   }
 
-  async function showFailing(finding: StructureFinding) {
+  async function showFailing(field: FieldSummary) {
     if (!structure) return
     setFailing(null)
     try {
-      setFailing(await window.api.failingRows(structure.zipName, finding.tableName, finding.columnName, finding.rule))
+      setFailing(await window.api.failingRows(structure.zipName, field.tableName, field.columnName))
+    } catch (reason: unknown) {
+      setError(String(reason))
+    }
+  }
+
+  async function showCodes(field: FieldSummary) {
+    if (!field.reference) return
+    setCodes(null)
+    setCodesField(`${field.tableName.toUpperCase()}.${field.columnName.toUpperCase()}`)
+    try {
+      setCodes(await window.api.referenceCodes(field.reference))
     } catch (reason: unknown) {
       setError(String(reason))
     }
@@ -83,6 +135,7 @@ export function StructureCheckPage() {
     .sort((a, b) => a.localeCompare(b, 'th', { numeric: true, sensitivity: 'base' }))
   const findings = structure?.findings.filter((finding) =>
     (level === 'all' || finding.level === level) && (file === 'all' || finding.tableName === file)) ?? []
+  const fields = summarize(findings)
   const errors = structure?.findings.filter((finding) => finding.level === 'error').length ?? 0
   const warnings = structure?.findings.filter((finding) => finding.level === 'warning').length ?? 0
 
@@ -152,18 +205,21 @@ export function StructureCheckPage() {
       {!!structure.findings.length && <div className="table-wrapper">
         <SortableTable className="data-table" aria-label="ผลตรวจตามโครงสร้าง"
           defaultSort={[{ column: 0, descending: false }, { column: 1, descending: false }]}>
-          <thead><tr><th>แฟ้ม</th><th>ฟิลด์</th><th>รายละเอียด</th><th>เกณฑ์</th><th className="col-right">จำนวนแถว</th><th className="col-right">ไม่ผ่าน</th><th className="col-right">ร้อยละ</th><th className="col-center">ระดับ</th><th className="col-center"></th></tr></thead>
+          <thead><tr><th>แฟ้ม</th><th>ฟิลด์</th><th>รายละเอียด</th><th className="col-right">จำนวนแถว</th><th className="col-right">ผ่าน</th><th className="col-right">ร้อยละ</th><th className="col-right">ไม่ผ่าน</th></tr></thead>
           <tbody>
-            {findings.map((finding) => <tr key={`${finding.tableName}-${finding.columnName}-${finding.rule}`}>
-              <td className="code-cell"><code>{finding.tableName.toUpperCase()}</code></td>
-              <td className="name-cell"><strong>{finding.columnName.toUpperCase()}</strong></td>
-              <td className="field-description">{finding.fieldDescription || '-'}</td>
-              <td>{finding.detail}</td>
-              <td className="col-right num-cell">{finding.tableRows.toLocaleString('en-US')}</td>
-              <td className="col-right num-cell">{finding.found.toLocaleString('en-US')}</td>
-              <td className="col-right num-cell">{finding.tableRows ? ((finding.found / finding.tableRows) * 100).toFixed(2) : '-'}</td>
-              <td className="col-center"><span className={`status-pill status-${finding.level}`}>{levelLabel[finding.level] ?? finding.level}</span></td>
-              <td className="col-center"><button type="button" className="mock-button" onClick={() => void showFailing(finding)}>ดูแถวที่ไม่ผ่าน</button></td>
+            {fields.map((field) => <tr key={`${field.tableName}-${field.columnName}`}>
+              <td className="code-cell"><code>{field.tableName.toUpperCase()}</code></td>
+              <td className="name-cell">{field.reference
+                ? <button type="button" className="link-button" title={`ดูรหัสที่ใช้ได้จาก ${field.reference}`}
+                    onClick={() => void showCodes(field)}><strong>{field.columnName.toUpperCase()}</strong></button>
+                : <strong>{field.columnName.toUpperCase()}</strong>}</td>
+              <td className="field-description">{field.fieldDescription || '-'}</td>
+              <td className="col-right num-cell">{field.tableRows.toLocaleString('en-US')}</td>
+              <td className="col-right num-cell">{(field.tableRows - field.failed).toLocaleString('en-US')}</td>
+              <td className="col-right num-cell">{field.tableRows ? (((field.tableRows - field.failed) / field.tableRows) * 100).toFixed(2) : '-'}</td>
+              <td className="col-right num-cell"><button type="button" className="link-button"
+                title={`ดูแถวที่ไม่ผ่านของ ${field.tableName.toUpperCase()}.${field.columnName.toUpperCase()}`}
+                onClick={() => void showFailing(field)}><strong>{field.failed.toLocaleString('en-US')}</strong></button></td>
             </tr>)}
           </tbody>
         </SortableTable>
@@ -172,7 +228,34 @@ export function StructureCheckPage() {
       {!!structure.findings.length && !findings.length && <p className="hint-text">ไม่พบรายการตามตัวกรองที่เลือก</p>}
     </>}
 
-    <dialog className="large-modal" ref={failingDialog} onClose={() => setFailing(null)}
+    <dialog className="large-modal" aria-label="รหัสมาตรฐานของฟิลด์" ref={codesDialog} onClose={() => setCodes(null)}
+      style={{ translate: `${codesOffset.x}px ${codesOffset.y}px` }}
+      onClick={(event) => { if (event.target === codesDialog.current) setCodes(null) }}>
+      {codes && <>
+        <header onPointerDown={(event) => moveModal(event, setCodesOffset, codesOffset)}>
+          <div>
+            <strong>รหัสที่ใช้ได้ — {codesField}</strong>
+            <small><code>{codes.table}</code> · {codes.rows.length.toLocaleString('en-US')} รหัส</small>
+          </div>
+          <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => setCodes(null)}>
+            <Icon name="close" size={16} />
+          </button>
+        </header>
+        <div className="table-wrapper">
+          <SortableTable className="data-table" aria-label={`รหัสมาตรฐานใน ${codes.table}`}>
+            <thead><tr>{codes.columns.map((name) => <th key={name}>{name.toUpperCase()}</th>)}</tr></thead>
+            <tbody>
+              {codes.rows.map((row) => <tr key={row[0]}>
+                {row.map((value, column) => <td key={codes.columns[column]}
+                  className={column === 0 ? 'code-cell' : ''}>{column === 0 ? <code>{value}</code> : value}</td>)}
+              </tr>)}
+            </tbody>
+          </SortableTable>
+        </div>
+      </>}
+    </dialog>
+
+    <dialog className="large-modal" aria-label="แถวที่ไม่ผ่านเกณฑ์" ref={failingDialog} onClose={() => setFailing(null)}
       style={{ translate: `${offset.x}px ${offset.y}px` }}
       onClick={(event) => { if (event.target === failingDialog.current) setFailing(null) }}>
       {failing && <>
@@ -190,7 +273,8 @@ export function StructureCheckPage() {
             <thead><tr>{failing.columns.map((name) => <th key={name}>{name.toUpperCase()}</th>)}</tr></thead>
             <tbody>
               {failing.rows.map((row, index) => <tr key={index}>
-                {row.map((value, column) => <td key={failing.columns[column]} className="num-cell">{value === '' ? <em>(ว่าง)</em> : value}</td>)}
+                {row.map((value, column) => <td key={failing.columns[column]}
+                  className={column === failing.columns.length - 1 ? '' : 'num-cell'}>{value === '' ? <em>(ว่าง)</em> : value}</td>)}
               </tr>)}
             </tbody>
           </SortableTable>

@@ -1,17 +1,17 @@
-// Pulls two things out of a SUB-HDC MySQL/MariaDB server, both consumed by openDatabase():
+// Pulls two things out of a MySQL/MariaDB 43-file database, both consumed by openDatabase():
 //   src/main/reference/c-tables.json   the c_* reference (code) tables, structure AND rows
 //   src/main/reference/f43-tables.json the 43-file data tables, structure ONLY (no rows)
 //
 //   SUBHDC_PASSWORD=secret node scripts/pull-reference-tables.mjs
 //
-// Host/port/user/database default to the provincial SUB-HDC box and can be overridden
-// with SUBHDC_HOST / SUBHDC_PORT / SUBHDC_USER / SUBHDC_DATABASE.
+// Host/port/user/database can be overridden with
+// SUBHDC_HOST / SUBHDC_PORT / SUBHDC_USER / SUBHDC_DATABASE.
 import { execFileSync } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Skipped entirely: SUB-HDC account tables, not 43-file reference data.
+// Skipped entirely: account tables, not 43-file reference data.
 // c_user_provider also holds real ProviderID identities (name, cid_hash, e-mail, date of birth).
 const EXCLUDED = new Set(['c_user_provider', 'c_user_role'])
 
@@ -83,7 +83,7 @@ console.log(`wrote ${target} — ${names.length} tables, ${total} rows`)
 
 // --- the 43 standard files: structure only, never rows -----------------------------------
 
-// c_file is SUB-HDC's own list of the standard files it accepts.
+// c_file is the upstream list of the standard files it accepts.
 const [files] = run([`SELECT JSON_ARRAYAGG(file_name) AS j FROM c_file`])
 const fileNames = files.map((name) => name.toLowerCase()).sort()
 const quoted = fileNames.map((name) => `'${name}'`).join(',')

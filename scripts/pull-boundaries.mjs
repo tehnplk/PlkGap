@@ -1,4 +1,4 @@
-// Pulls province / district / subdistrict boundaries from the SUB-HDC PostGIS database and writes
+// Pulls province / district / subdistrict boundaries from a PostGIS database and writes
 // src/main/reference/boundaries.json, which openDatabase() seeds into the c_* geography tables.
 //
 //   SUBHDC_GIS_PASSWORD=secret node scripts/pull-boundaries.mjs

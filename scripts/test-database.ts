@@ -5,8 +5,13 @@ import { join } from 'node:path'
 import { openDatabase, databaseStatus, loadReferenceTables, createFileTables, createAppTables, countByFiscalYears, listImportLog, startImportRun, insertStandardRows, loadGeographyTables } from '../src/main/database.ts'
 import type { FileStructure } from '../src/main/database.ts'
 import { checkObservations, observationRows, listObservationRules, setObservationRuleActive, syncObservationRules } from '../src/main/database.ts'
-import { describeTable, listTables, runReadOnlySql, MASK } from '../src/main/database.ts'
+import { describeTable, listTables, runReadOnlySql, createApiSchema, MASK } from '../src/main/database.ts'
 import fileStructure from '../src/main/reference/f43-tables.json' with { type: 'json' }
+import referenceData from '../src/main/reference/c-tables.json' with { type: 'json' }
+import structureCodes from '../src/main/reference/structure-codes.json' with { type: 'json' }
+import standardCodes from '../src/main/reference/standard-codes.json' with { type: 'json' }
+import { buildStructureCodes } from './generate-structure-codes.mjs'
+import { checkImportStructure, structureFailingRows, structureResult, referenceCodeList, loadStructureCodeTables, referenceTablesInUse } from '../src/main/database.ts'
 
 async function main() {
 const directory = await mkdtemp(join(tmpdir(), 'plkgap-db-test-'))
@@ -15,6 +20,33 @@ try {
   db = await openDatabase(join(directory, 'db'))
   const status = await databaseStatus(db, directory)
   assert.match(status.postgis, /POSTGIS=/)
+
+  // Fresh tables (the 52 files, both logs) arrive as structure only, zero rows. Initial tables
+  // (the code lists, the component register and the rule catalog) arrive with the rows this run
+  // wrote from code and the reference files — never rows shipped as data.
+  const ours = await db.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+       AND table_name NOT LIKE 'c\\_%' AND table_name <> 'spatial_ref_sys' ORDER BY table_name`)
+  const freshTables = ours.rows.map((row) => row.table_name)
+    .filter((name) => name !== 'schema_init' && name !== 'observ_check')
+  assert.equal(freshTables.length, fileStructure.tables.length + 2,
+    'the 52 files and the two log tables are the fresh tables')
+  for (const name of freshTables) {
+    const count = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM "${name}"`)
+    assert.equal(count.rows[0].n, 0, `fresh table ${name} is structure only on a new installation`)
+  }
+  const components = await db.query<{ component: string }>('SELECT component FROM schema_init ORDER BY component')
+  assert.deepEqual(components.rows.map((row) => row.component),
+    ['api', 'app', 'files43', 'geography', 'observations', 'reference', 'structure_codes'],
+    'schema_init records exactly the components this install ran')
+  // observ_check is an initial table: the register seeds itself from observationRules(), all active.
+  const seededRules = await listObservationRules(db)
+  assert.ok(seededRules.length > 0 && seededRules.every((rule) => rule.active),
+    'every registered rule starts active, straight from code')
+  console.log(`PASS: new installation — ${freshTables.length} fresh tables hold no rows, `
+    + `initial tables hold ${components.rows.length} components and ${seededRules.length} rules`)
+
   await db.exec(`CREATE TABLE test_places (location geometry(Point, 4326));
     INSERT INTO test_places VALUES (ST_SetSRID(ST_MakePoint(100.2659, 16.8211), 4326));`)
   await db.close()
@@ -27,17 +59,73 @@ try {
   const load = await db.query<{ table_count: number; row_count: number }>(
     `SELECT table_count, row_count FROM schema_init WHERE component = 'reference'`)
   assert.equal(load.rows.length, 1, 'reference load is recorded once')
-  assert.ok(load.rows[0].table_count >= 120, 'every c_* reference table is created')
-  assert.ok(load.rows[0].row_count > 4000, 'reference rows are seeded')
+  assert.equal(load.rows[0].table_count, referenceTablesInUse.length,
+    'only the dictionary, the file list and the service-unit registry are seeded from the snapshot')
+  assert.ok(load.rows[0].row_count > 1000, 'reference rows are seeded')
+  // The snapshot's own code lookups are not seeded; the catalog owns those names now.
+  const retired = referenceData.tables.map((table) => table.name)
+    .filter((name) => !referenceTablesInUse.includes(name) && !structureCodes.tables.some((table) => table.name === name))
+  const leftovers = await db.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1)`, [retired])
+  assert.deepEqual(leftovers.rows, [], 'retired lookups are dropped, not left behind')
 
   const tables = await db.query<{ n: number }>(
     `SELECT COUNT(*)::int AS n FROM information_schema.tables
      WHERE table_schema='public' AND table_name LIKE 'c\\_%'
        AND table_name NOT IN ('c_province', 'c_district', 'c_subdistrict')`)
-  assert.equal(tables.rows[0].n, load.rows[0].table_count, 'created tables match the recorded count')
+  const supplements = await db.query<{ table_count: number; row_count: number }>(
+    `SELECT table_count, row_count FROM schema_init WHERE component = 'structure_codes'`)
+  assert.equal(tables.rows[0].n, load.rows[0].table_count + supplements.rows[0].table_count,
+    'created tables match the snapshot remnant plus the separately recorded catalog')
+  assert.equal(status.referenceTables, tables.rows[0].n)
+  assert.equal(status.referenceRows, load.rows[0].row_count + supplements.rows[0].row_count)
+  assert.deepEqual(buildStructureCodes(referenceData), structureCodes, 'generated catalog matches its two sources')
+  assert.ok(structureCodes.tables.length > standardCodes.tables.length,
+    'the catalog is the published lists plus the enumerations the dictionary spells out')
+  // Every published list is seeded exactly as pulled; CLINIC is composed per hospital, so its
+  // department list stays a lookup and never becomes a whole-value code rule.
+  for (const table of standardCodes.tables) {
+    const seeded = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM ${table.name}`)
+    assert.equal(seeded.rows[0].n, table.rows.length, `${table.name} is seeded from the published list`)
+  }
+  assert.ok(!structureCodes.bindings.some((binding) => binding.reference === 'c_clinic_department'),
+    'the clinic department list is never used as a whole-value code rule')
+  // No table drifts into the catalog unused: it either serves a field or says why it does not.
+  const bound = new Set(structureCodes.bindings.map((binding) => binding.reference))
+  const declared = new Set(structureCodes.unbound.map((entry) => entry.reference))
+  assert.deepEqual(structureCodes.tables.map((table) => table.name)
+    .filter((name) => !bound.has(name) && !declared.has(name)), [], 'every catalog table is bound or declared unbound')
+  assert.ok(structureCodes.unbound.every((entry) => entry.reason.length > 20), 'an unbound table carries its reason')
+  // Nothing relies on the c_<file>_<column> fallback: every rule comes from a binding that is
+  // written down, so reading the catalog tells the whole story.
+  const byBinding = new Set(structureCodes.bindings.map((binding) => `${binding.table}.${binding.column}`))
+  const dictionary = await db.query<{ field: string }>(`SELECT LOWER(table_name) || '.' || LOWER(name) AS field
+    FROM c_files_schema WHERE is_active = 1`)
+  const implicit = dictionary.rows.map((row) => row.field).filter((field) => !byBinding.has(field)
+    && structureCodes.tables.some((table) => table.name === `c_${field.replace('.', '_')}`))
+  assert.deepEqual(implicit, [], 'no field is validated by naming convention alone')
+  // labor.bplace states its codes in prose the parser cannot read, so they are transcribed from the
+  // same description. A visit number and a severity scale get no code list at all, by decision.
+  assert.ok(structureCodes.audit.some((entry) => entry.field === 'labor.bplace' && entry.status === 'transcribed'),
+    'labor.bplace keeps its code rule')
+  assert.ok(!structureCodes.bindings.some((binding) => ['anc.ancno', 'drugallergy.alevel']
+    .includes(`${binding.table}.${binding.column}`)), 'ancno and alevel are left to the required and width rules')
+  const prename = await db.query<{ code: string; sex: string; description: string }>(
+    `SELECT code, sex, description FROM c_person_prename WHERE code IN ('001', '099') ORDER BY code`)
+  assert.deepEqual(prename.rows, [
+    { code: '001', sex: '1', description: 'เด็กชาย' },
+    { code: '099', sex: '', description: 'พระเจ้าหลานเธอ พระองค์เจ้า' },
+  ], 'a title used by one sex keeps it; a title used by both carries none')
+  assert.equal(structureCodes.bindings.find((binding) => binding.table === 'icf' && binding.column === 'icf')?.reference,
+    'c_icf_icf', 'ICF validates the condition code, with its qualifier checked separately')
+  assert.equal(structureCodes.bindings.find((binding) => binding.table === 'provider' && binding.column === 'sex')?.reference,
+    'c_person_sex', 'provider sex reuses the existing equivalent list')
+  assert.ok(!structureCodes.bindings.some((binding) => ['chronic.date_disch', 'person.ddischarge', 'newborn.asphyxia']
+    .includes(`${binding.table}.${binding.column}`)), 'dates and score ranges are not guessed')
+  assert.equal((await loadStructureCodeTables(db)).applied, false, 'unchanged code lists do not re-seed')
   assert.equal((await db.query(
     `SELECT 1 FROM information_schema.tables WHERE table_name IN ('c_user_provider','c_user_role')`)).rows.length,
-    0, 'SUB-HDC account tables are not shipped')
+    0, 'account tables are not shipped')
 
   const schema = await db.query<{ n: number }>('SELECT COUNT(*)::int AS n FROM c_files_schema')
   assert.ok(schema.rows[0].n > 700, 'the 43-file data dictionary is loaded')
@@ -50,7 +138,7 @@ try {
 
   const again = await loadReferenceTables(db)
   assert.equal(again.applied, false, 'a second load of the same version is a no-op')
-  console.log(`PASS: ${load.rows[0].table_count} SUB-HDC c_* reference tables (${load.rows[0].row_count} rows) seeded idempotently`)
+  console.log(`PASS: ${load.rows[0].table_count} c_* reference tables (${load.rows[0].row_count} rows) seeded idempotently`)
 
   // The geography lookup keys on the same CHANGWAT/AMPUR/TAMBON codes the 43 files use.
   const geography = await db.query<{ table_count: number; row_count: number }>(
@@ -80,7 +168,7 @@ try {
   const personColumns = await db.query<{ column_name: string; data_type: string; character_maximum_length: number; is_nullable: string; column_default: string | null }>(
     `SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
      FROM information_schema.columns WHERE table_schema='public' AND table_name='person' ORDER BY ordinal_position`)
-  assert.equal(personColumns.rows.length, 35, 'person keeps all of its SUB-HDC columns')
+  assert.equal(personColumns.rows.length, 35, 'person keeps all of its standard columns')
   assert.deepEqual(personColumns.rows[0], { column_name: 'hospcode', data_type: 'character varying', character_maximum_length: 10, is_nullable: 'NO', column_default: `''::character varying` })
   const primaryKey = await db.query<{ column_name: string }>(
     `SELECT a.attname AS column_name FROM pg_index i
@@ -91,18 +179,18 @@ try {
 
   await db.query(`INSERT INTO person (hospcode, pid, cid) VALUES ('07476', '00001', '1234567890123')`)
   const inserted = await db.query<{ hid: string; log_import_id: number | null }>('SELECT hid, log_import_id FROM person')
-  assert.deepEqual(inserted.rows, [{ hid: '', log_import_id: null }], 'NOT NULL columns fall back to the SUB-HDC empty-string default')
+  assert.deepEqual(inserted.rows, [{ hid: '', log_import_id: null }], 'NOT NULL columns fall back to the empty-string default')
   await db.query('DELETE FROM person')
 
   const rerun = await createFileTables(db)
   assert.equal(rerun.applied, false, 'creating the file tables again is a no-op')
   assert.equal(rerun.created, 0, 'creating the file tables again adds nothing')
-  console.log(`PASS: ${rerun.table_count} 43-file tables created empty with SUB-HDC columns, keys and indexes`)
+  console.log(`PASS: ${rerun.table_count} 43-file tables created empty with standard columns, keys and indexes`)
 
   // Setup happens once: reopening the database must not redo or re-stamp any of it.
   const before = await db.query<{ component: string; initialized_at: Date }>(
     'SELECT component, initialized_at FROM schema_init ORDER BY component')
-  assert.deepEqual(before.rows.map((row) => row.component), ['api', 'app', 'files43', 'geography', 'observations', 'reference'],
+  assert.deepEqual(before.rows.map((row) => row.component), ['api', 'app', 'files43', 'geography', 'observations', 'reference', 'structure_codes'],
     'every component is recorded')
   await db.close()
   db = await openDatabase(join(directory, 'db'))
@@ -238,7 +326,7 @@ try {
   // Not an exact count: the structure-upgrade test above added a column PERSON now keeps for good.
   assert.ok(described.columns.length >= 35, 'every PERSON column is described')
   assert.deepEqual(described.columns.slice(0, 3).map((column) => column.name), ['hospcode', 'cid', 'pid'],
-    'columns keep their SUB-HDC order')
+    'columns keep their standard order')
   assert.match(described.columns[0].caption, /รหัสหน่วยบริการ/, 'the Thai dictionary text comes along')
   assert.match(described.description, /แฟ้มสะสม/, 'so does the file description')
   assert.ok(described.indexes.includes('idx_person_cid'))
@@ -303,6 +391,23 @@ try {
     DELETE FROM address WHERE pid = 'MASK';`)
   console.log(`PASS: /sql masks ${MASK} at source — alias, function, subquery and SELECT * all get it`)
 
+  // An installed database carries api views over its reference tables; re-seeding drops the tables
+  // and the views with them, so the next api build has to notice and put them back.
+  const upgraded = await loadReferenceTables(db, { ...referenceData, pulledAt: 'upgrade-probe' })
+  assert.equal(upgraded.applied, true, 'a changed snapshot re-seeds instead of failing on a dependent view')
+  const orphaned = await db.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM information_schema.views
+     WHERE table_schema = 'api' AND table_name = 'c_files_schema'`)
+  assert.equal(orphaned.rows[0].n, 0, 'the cascade takes the view of a rebuilt table with it')
+  assert.equal((await createApiSchema(db)).applied, true, 'missing views are rebuilt even at the same digest')
+  assert.equal((await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM information_schema.views
+    WHERE table_schema = 'api' AND table_name = 'c_files_schema'`)).rows[0].n, 1, 'the view is back')
+  assert.ok((await runReadOnlySql(db, 'SELECT file_name FROM c_file LIMIT 1')).rows.length,
+    'the api role can read through the rebuilt views')
+  await loadReferenceTables(db)
+  await createApiSchema(db)
+  console.log('PASS: re-seeding a reference table survives the api views that depend on it')
+
   const observationsRun = await startImportRun(db, { name: 'observations.zip', path: 'observations.zip', size: 1 })
   const cidBase = '123456789012'
   const validCid = cidBase + ((11 - [...cidBase].reduce((sum, digit, index) => sum + Number(digit) * (13 - index), 0) % 11) % 10)
@@ -314,6 +419,10 @@ try {
   await insertStandardRows(db, second, 'person', personHeader, [
     ['07488', 'D', validCid, '099', '003', '1', '1', '20260901', '20000101', 'H1', '1', 'ดี', 'ทดสอบ'],
     ['99999', 'D', validCid, '099', '003', '1', '1', '20200101', '20000101', 'H1', '1', 'ดี', 'ทดสอบ'],
+    // Same CID as Y in the checked zip, same HOSPCODE: a duplicate is a duplicate across imports.
+    ['07488', 'Z2', loneCid, '099', '003', '1', '1', '20200101', '20000101', 'H1', '1', 'ซี', 'ทดสอบ'],
+    // Same CID as M, but another HOSPCODE — another register, so it is not a duplicate.
+    ['99999', 'W', wrongCid, '099', '003', '1', '1', '20200101', '20000101', 'H1', '1', 'ดับเบิลยู', 'ทดสอบ'],
   ])
   await insertStandardRows(db, observationsRun, 'person', personHeader, [
     ['07488', 'M', wrongCid, '099', '003', '2', '1', 'invalid', '20000101', 'H1', '1', 'เอ็ม', 'ทดสอบ'],
@@ -358,7 +467,10 @@ try {
       ['07488', 'D', 'A3', '20260901', '20260830'],
       ['07488', 'D', 'A4', '', '20260901'],
     ])
-  const observed = await checkObservations(db, 'observations.zip')
+  const observationSteps: { done: number; total: number; percent: number }[] = []
+  const observed = await checkObservations(db, 'observations.zip', (progress) => observationSteps.push(progress))
+  assert.equal(observationSteps.length, observed.findings.length + 1, 'one step per rule that ran, then the summary')
+  assert.deepEqual([observationSteps[0].percent, observationSteps.at(-1)?.percent], [0, 100])
   assert.deepEqual(observed.findings.map(({ id, checked, skipped, found }) => ({ id, checked, skipped, found })), [
     { id: 'service-after-death', checked: 3, skipped: 5, found: 1 },
     { id: 'thai-cid-mod11', checked: 5, skipped: 1, found: 3 },
@@ -370,7 +482,9 @@ try {
     { id: 'drug-without-service', checked: 2, skipped: 0, found: 1 },
     { id: 'service-without-person', checked: 8, skipped: 0, found: 1 },
     { id: 'person-without-home', checked: 5, skipped: 1, found: 2 },
-    { id: 'duplicate-cid', checked: 4, skipped: 2, found: 2 },
+    // G and X share a CID inside the zip; Y shares one with Z2 from an earlier zip. M shares its
+    // CID only with another HOSPCODE, so it is left alone.
+    { id: 'duplicate-cid', checked: 4, skipped: 2, found: 3 },
     { id: 'death-without-discharge', checked: 3, skipped: 2, found: 2 },
     { id: 'discharge-before-admit', checked: 3, skipped: 1, found: 2 },
   ])
@@ -384,7 +498,8 @@ try {
   await assert.rejects(() => observationRows(db, 'observations.zip', 'unknown'), /ไม่รู้จักเกณฑ์/)
   assert.ok((await checkObservations(db, 'missing.zip')).findings.every((finding) => finding.checked === 0 && finding.found === 0))
   console.log(`PASS: ${observed.findings.length} observation rules — cross-import PERSON/HOME joins, date boundaries,`
-    + ' MOD11, prefix mapping, orphan rows, duplicate CID, both datetime stamp lengths, skipped rows and zip scope')
+    + ' MOD11, prefix mapping, orphan rows, duplicate CID across zips within one HOSPCODE,'
+    + ' both datetime stamp lengths, skipped rows and zip scope')
 
   // The observ_check register: seeded from the rules in code, and the only thing that decides
   // which of them a check actually runs.
@@ -409,6 +524,184 @@ try {
   assert.equal((await listObservationRules(db)).find((rule) => rule.id === 'prename-sex')?.active, true,
     'a rule can be switched back on')
   console.log('PASS: observ_check register seeds from code, survives re-seeding and decides which rules run')
+
+  // Validate actual imported rows against both reused and generated lists, including drill-down.
+  const codeZip = 'structure-codes.zip'
+  const codeRun = await startImportRun(db, { name: codeZip, path: codeZip, size: 1 })
+  await insertStandardRows(db, codeRun, 'refer_history', ['HOSPCODE', 'REFERID', 'PTYPE', 'EMERGENCY', 'PTYPEDIS', 'CAUSEOUT'], [
+    ['07476', 'C1', '1', '1', '01', '7'],
+    ['07476', 'C2', '8', '6', '1', '8'],
+    ['07476', 'C3', '', '', '', ''],
+  ])
+  await insertStandardRows(db, codeRun, 'refer_result', ['HOSPCODE', 'REFERID_SOURCE', 'HOSP_SOURCE', 'REFER_RESULT'], [
+    ['07476', 'C1', '07488', '1'], ['07476', 'C2', '07488', '8'],
+  ])
+  await insertStandardRows(db, codeRun, 'village', ['HOSPCODE', 'VID', 'WASTEWATER', 'GARBAGE'], [
+    ['07476', 'C1', '9', '0'], ['07476', 'C2', '2', '7'],
+  ])
+  await insertStandardRows(db, codeRun, 'women', ['HOSPCODE', 'PID', 'FPTYPE'], [
+    ['07476', 'C1', '8'], ['07476', 'C2', '0'],
+  ])
+  await insertStandardRows(db, codeRun, 'provider', ['HOSPCODE', 'PROVIDER', 'SEX'], [
+    ['07476', 'C1', '1'], ['07476', 'C2', '9'],
+  ])
+  await insertStandardRows(db, codeRun, 'service', ['HOSPCODE', 'SEQ', 'DATE_SERV', 'TYPEIN'], [
+    ['07476', 'C1', '20260909', '5'], ['07476', 'C2', '20260909', '8'],
+  ])
+  // Another zip's bad code must not inflate counts or enter drill-down.
+  await insertStandardRows(db, second, 'women', ['HOSPCODE', 'PID', 'FPTYPE'], [['07476', 'OTHER', '0']])
+  // Both checks report where they are, so a long run can show progress in the status bar.
+  const structureSteps: { done: number; total: number; step: string; percent: number }[] = []
+  const codeCheck = await checkImportStructure(db, codeZip, (progress) => structureSteps.push(progress))
+  assert.equal(structureSteps.length, 53, 'one step per 43-file table, then the summary')
+  assert.deepEqual([structureSteps[0].percent, structureSteps.at(-1)?.percent], [0, 100])
+  assert.ok(structureSteps.every((entry, index) => index === 0 || entry.percent >= structureSteps[index - 1].percent),
+    'progress never goes backwards')
+  assert.equal(structureSteps.at(-1)?.step, 'สรุปผล')
+  const codeFindings = codeCheck.findings.filter((finding) => finding.rule === 'code')
+  assert.equal(codeFindings.length, 10, 'all eight new lists plus two reused lists report invalid codes')
+  assert.ok(codeFindings.every((finding) => finding.found === 1 && finding.level === 'error'))
+  for (const finding of codeFindings) {
+    const detail = await structureFailingRows(db, codeZip, finding.tableName, finding.columnName, 'code')
+    assert.equal(detail.total, finding.found, 'drill-down and summary share the same code predicate')
+    assert.equal(detail.rows.length, 1)
+  }
+  const leadingZero = await structureFailingRows(db, codeZip, 'refer_history', 'ptypedis', 'code')
+  assert.equal(leadingZero.rows[0][leadingZero.columns.indexOf('ptypedis')], '1', '01 passes but 1 does not match a two-character code')
+  const checkedAgain = await checkImportStructure(db, codeZip)
+  assert.equal(checkedAgain.findings.filter((finding) => finding.rule === 'code').length, 10, 'recheck replaces stored results')
+
+  const orderedZip = 'structure-order.zip'
+  const orderedRun = await startImportRun(db, { name: orderedZip, path: orderedZip, size: 1 })
+  await insertStandardRows(db, orderedRun, 'refer_history', ['HOSPCODE', 'REFERID', 'PTYPE', 'PTYPEDIS'], [
+    ['07476', 'ORDER1', '', ''], ['07476', 'ORDER2', '88', ''],
+    ['07476', 'ORDER3', '8', ''], ['07476', 'ORDER4', '1', '01'],
+  ])
+  // SQL NULL is distinct from the empty strings produced by ordinary imports.
+  await db.exec('ALTER TABLE refer_history ALTER COLUMN ptype DROP NOT NULL')
+  await insertStandardRows(db, orderedRun, 'refer_history', ['HOSPCODE', 'REFERID', 'PTYPE'], [['07476', 'ORDER5', '1']])
+  await db.query("UPDATE refer_history SET ptype = NULL WHERE referid = 'ORDER5'")
+  await insertStandardRows(db, orderedRun, 'service', ['HOSPCODE', 'SEQ', 'DATE_SERV', 'PRICE'], [
+    ['07476', 'ORDER1', 'abcdefgh', 'abc'],
+  ])
+  const ordered = await checkImportStructure(db, orderedZip)
+  const orderedField = ordered.findings.filter((finding) => finding.tableName === 'refer_history' && finding.columnName === 'ptype')
+  assert.deepEqual(orderedField.map((finding) => [finding.rule, finding.found]),
+    [['required', 2], ['width', 1], ['code', 1]], 'required, width, lookup are ordered and mutually exclusive per value')
+  assert.ok(!ordered.findings.some((finding) => finding.rule === 'number' || finding.rule === 'date'),
+    'structural checks contain only the requested three stages')
+  assert.ok(!ordered.findings.some((finding) => finding.columnName === 'ptypedis'), 'optional blanks skip width and lookup')
+  for (const [rule, expected] of [['required', ['ORDER1', 'ORDER5']], ['width', ['ORDER2']], ['code', ['ORDER3']]] as const) {
+    const sample = await structureFailingRows(db, orderedZip, 'refer_history', 'ptype', rule)
+    assert.equal(sample.total, expected.length)
+    assert.deepEqual(sample.rows.map((row) => row[sample.columns.indexOf('referid')]).sort(), [...expected])
+  }
+  // Without a rule the drill-down covers the whole field, and every record names the rule it broke.
+  const everyRule = await structureFailingRows(db, orderedZip, 'refer_history', 'ptype')
+  assert.equal(everyRule.columns.at(-1), 'เกณฑ์', 'the last column names the rule')
+  assert.equal(everyRule.total, 4, 'one record per failing row, never counted twice')
+  const named = new Map(everyRule.rows.map((row) => [row[everyRule.columns.indexOf('referid')], row.at(-1) ?? '']))
+  assert.equal(named.get('ORDER1'), 'ห้ามเป็นค่าว่าง')
+  assert.equal(named.get('ORDER5'), 'ห้ามเป็นค่าว่าง')
+  assert.match(named.get('ORDER2') ?? '', /^ความยาวเกิน/)
+  assert.equal(named.get('ORDER3'), 'ไม่ตรงตามรหัสมาตรฐาน')
+
+  await db.query("UPDATE refer_history SET ptype = '' WHERE referid = 'ORDER5'")
+  await db.exec('ALTER TABLE refer_history ALTER COLUMN ptype SET NOT NULL')
+  // The lookup step depends on an actually present c_* table, not just a bundled binding.
+  await db.exec('ALTER TABLE c_refer_history_ptype RENAME TO temporarily_missing_ptype')
+  try {
+    const absent = await checkImportStructure(db, orderedZip)
+    assert.deepEqual(absent.findings.filter((finding) => finding.tableName === 'refer_history' && finding.columnName === 'ptype')
+      .map((finding) => finding.rule), ['required', 'width'], 'a missing lookup skips only stage three')
+    await assert.rejects(structureFailingRows(db, orderedZip, 'refer_history', 'ptype', 'code'), /ไม่รู้จักเกณฑ์/)
+  } finally {
+    await db.exec('ALTER TABLE temporarily_missing_ptype RENAME TO c_refer_history_ptype')
+  }
+  const labor = fileStructure.tables.find((table) => table.name === 'labor')!
+  await insertStandardRows(db, orderedRun, 'labor', [...labor.primaryKey.map((key) => key.toUpperCase()), 'BPLACE'],
+    [[...labor.primaryKey.map((_key, index) => index === 0 ? '07476' : 'ORDER1'), '8']])
+  const existingLookup = await checkImportStructure(db, orderedZip)
+  assert.ok(existingLookup.findings.some((finding) => finding.tableName === 'labor' && finding.columnName === 'bplace'
+    && finding.rule === 'code'), 'existing field-specific tables work even without an extracted description binding')
+  console.log('PASS: required -> width -> existing lookup precedence, NULL/empty handling, skipped lookups and matching drill-down')
+  assert.deepEqual((await runReadOnlySql(db, "SELECT code FROM c_refer_history_ptypedis WHERE code = '01'")).rows,
+    [{ code: '01' }], 'generated code tables are available through the masked read-only API')
+
+  const importedBefore = await db.query('SELECT * FROM refer_history ORDER BY referid')
+  const oldLookup = await db.query('SELECT * FROM c_service_typein ORDER BY code')
+  const changedCodes = structuredClone(structureCodes)
+  changedCodes.tables[0].rows[0].description += ' (test revision)'
+  assert.equal((await loadStructureCodeTables(db, changedCodes)).applied, true, 'a changed catalog seeds once')
+  assert.equal((await loadStructureCodeTables(db, changedCodes)).applied, false)
+  assert.deepEqual((await db.query('SELECT * FROM refer_history ORDER BY referid')).rows, importedBefore.rows,
+    'code catalog upgrades preserve imported records')
+  assert.deepEqual((await db.query('SELECT * FROM c_service_typein ORDER BY code')).rows, oldLookup.rows,
+    'code catalog upgrades do not overwrite upstream tables or their extra codes')
+  const brokenCodes = structuredClone(changedCodes)
+  brokenCodes.tables[0].rows.push(brokenCodes.tables[0].rows[0])
+  await assert.rejects(loadStructureCodeTables(db, brokenCodes), /duplicate key/)
+  assert.equal((await loadStructureCodeTables(db, changedCodes)).applied, false, 'failed seed rolls back its version marker')
+  assert.equal((await db.query('SELECT * FROM c_refer_history_ptype')).rows.length, 3, 'failed seed rolls back deleted rows')
+  await loadStructureCodeTables(db)
+  // A published code longer than the dictionary's own width is the dictionary being stale.
+  const wideZip = 'structure-wide.zip'
+  const wideRun = await startImportRun(db, { name: wideZip, path: wideZip, size: 1 })
+  await insertStandardRows(db, wideRun, 'epi', ['HOSPCODE', 'PID', 'SEQ', 'VACCINEPLACE', 'VACCINETYPE', 'DATE_SERV'], [
+    ['07476', 'W1', 'W1', '07476', 'HPVG91', '20260909'],
+    ['07476', 'W2', 'W2', '07476', 'NOTACODE', '20260909'],
+    ['07476', 'W3', 'W3', '07476', '010', '20260909'],
+  ])
+  const wide = await checkImportStructure(db, wideZip)
+  assert.deepEqual(wide.findings.filter((finding) => finding.columnName === 'vaccinetype')
+    .map((finding) => [finding.rule, finding.found]), [['code', 1]],
+    'no width rule where the list is wider than the dictionary; the list alone judges the value')
+
+  // A service-unit code is the full width in digits. Ward, clinic and DRG fields are the same
+  // width and are not unit codes, so they keep the plain width rule.
+  const unitZip = 'structure-unit.zip'
+  const unitRun = await startImportRun(db, { name: unitZip, path: unitZip, size: 1 })
+  await insertStandardRows(db, unitRun, 'service', ['HOSPCODE', 'SEQ', 'DATE_SERV', 'MAIN'], [
+    ['07476', 'U1', '20260909', '07476'],
+    ['7476', 'U2', '20260909', '074A6'],
+    ['0747A', 'U3', '20260909', ''],
+    // The nine-character unit code some sites already send belongs to the width rule, once.
+    ['GA0007476', 'U4', '20260909', '07476'],
+  ])
+  await insertStandardRows(db, unitRun, 'diagnosis_opd', ['HOSPCODE', 'PID', 'SEQ', 'DATE_SERV', 'DIAGCODE', 'CLINIC'], [
+    ['07476', 'U1', 'U1', '20260909', 'A00', '001'],
+  ])
+  const unit = await checkImportStructure(db, unitZip)
+  assert.deepEqual(unit.findings.filter((finding) => finding.rule === 'unitcode')
+    .map((finding) => [finding.tableName, finding.columnName, finding.found, finding.level]).sort(),
+    [['service', 'hospcode', 2, 'error'], ['service', 'main', 1, 'error']],
+    'short and non-numeric unit codes are reported; an empty one belongs to the required rule')
+  assert.deepEqual(unit.findings.filter((finding) => finding.columnName === 'hospcode')
+    .map((finding) => [finding.rule, finding.found]), [['width', 1], ['unitcode', 2]],
+    'an over-long unit code is counted by width alone, never twice')
+  assert.ok(!unit.findings.some((finding) => finding.columnName === 'clinic'),
+    'a five-digit clinic code is not a unit code')
+  const shortUnit = await structureFailingRows(db, unitZip, 'service', 'hospcode', 'unitcode')
+  assert.deepEqual(shortUnit.rows.map((row) => row[shortUnit.columns.indexOf('seq')]).sort(), ['U2', 'U3'],
+    'drill-down and summary share the same unit-code predicate')
+
+  // A finding names the list its field is judged by, so the page can show what is allowed.
+  const fpFinding = codeCheck.findings.find((finding) => finding.tableName === 'women' && finding.columnName === 'fptype')
+  assert.equal(fpFinding?.reference, 'c_fptype', 'a finding carries the shared list it was judged against')
+  const stored = await structureResult(db, codeZip)
+  assert.equal(stored?.findings.find((finding) => finding.columnName === 'fptype')?.reference, 'c_fptype',
+    'the stored result derives the same list on read')
+  assert.ok(!codeCheck.findings.some((finding) => finding.columnName === 'pid' && finding.reference),
+    'a field with no list carries no reference')
+  const list = await referenceCodeList(db, 'c_fptype')
+  assert.deepEqual(list.columns, ['code', 'description', 'is_active'])
+  assert.equal(list.rows.length, 9, 'the whole list comes back, sorted by code')
+  assert.deepEqual(list.rows[0], ['1', 'ยาเม็ดคุมกำเนิด', '1'])
+  await assert.rejects(referenceCodeList(db, 'person'), /ไม่รู้จักตาราง/, 'only a c_* table is readable')
+  await assert.rejects(referenceCodeList(db, 'c_files_schema'), /ไม่รู้จักตาราง/, 'and only one that is a code list')
+  await assert.rejects(referenceCodeList(db, 'c_nope'), /ไม่รู้จักตาราง/)
+
+  console.log('PASS: generated code lists, preserved upstream data, exact code validation, zip scope, drill-down and transactional upgrades')
 } finally {
   if (db && !db.closed) await db.close()
   await rm(directory, { recursive: true, force: true })

@@ -59,7 +59,7 @@ export function HouseholdMapPage() {
     map.addLayer(cluster)
     if (households.length) map.fitBounds(cluster.getBounds().pad(0.1))
 
-    // Administrative outlines from the SUB-HDC PostGIS server, drawn under the households.
+    // Administrative outlines, drawn under the households.
     const outline = (collection: BoundaryCollection, color: string, weight: number) =>
       L.geoJSON(collection as unknown as GeoJSON.GeoJsonObject, {
         style: { color, weight, fill: true, fillOpacity: 0.03, fillColor: color },

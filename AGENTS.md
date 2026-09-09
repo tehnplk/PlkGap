@@ -2,6 +2,16 @@
 
 ห้ามเพิ่ม แก้ไข หรือลบเอกสารนี้โดยไม่ได้รับอนุญาตจาก user
 
+## SSO และบัญชีที่จำไว้ในเครื่อง
+
+- อ่าน `SSO.md` ก่อนแก้ระบบบัญชี; config อยู่ `src/main/sso-config.json` และต้องใช้ Public + PKCE ไม่มี client secret
+- ผู้ใช้กำหนดให้จำบัญชีจนกด Logout: ห้ามเพิ่ม auto logout ตามอายุ access token หรือบังคับต่อ SSO ทุกครั้งที่เปิดแอป
+- `signed-in` คือบัญชีที่จำไว้ในเครื่อง ไม่ใช่หลักฐานว่า token ยังใช้ได้; ห้ามใช้สถานะนี้อนุญาต remote API หรือยืดอายุ token เอง
+- ถ้าเพิ่มหน้าที่ต้อง login ให้ทำทั้ง renderer gate และตรวจ main-process snapshot หลัง `authorizedWindow(event)` ใน IPC; การซ่อนเมนูอย่างเดียวไม่ใช่การป้องกัน ดูตัวอย่างใน `SSO.md` (ปัจจุบันยังไม่ได้บังคับ login ทุกหน้า)
+- บัญชีและ token เก็บแบบเข้ารหัสผ่าน `sso-store.ts` ใน main process เท่านั้น; renderer รับเฉพาะสถานะและ profile
+- Logout ต้องล้างบัญชีในเครื่องแม้ติดต่อ SSO ไม่ได้; คงการตรวจ JWT ตอน login และการป้องกัน login/restore ที่เสร็จช้ามาทับ Logout
+- แก้ lifecycle ให้ตรวจ `npm run test:sso` และหลัง build รัน `node scripts/test-sso-persistence.mjs`; test หลังนี้ยังไม่ได้รวมใน `npm test`
+
 ## MDI: `src/renderer/src/pages/` และ `App.tsx`
 
 - ไม่มี router: หนึ่งไฟล์ page ต่อหนึ่ง `Kind` เป็นเนื้อหาภายในหน้าต่างย่อย
@@ -56,14 +66,68 @@ Embedded PostgreSQL (WASM) ใน Electron; ไม่มี server/พอร์�
 - Schema/migration อยู่ใน `initializeSchema(db)` ที่ `openDatabase()` เรียกก่อน return ต้อง idempotent; ห้ามสร้างตารางแยกใน startup
 - Init schema ครั้งแรกและเมื่อเวอร์ชัน component เปลี่ยนเท่านั้น: `schema_init` เก็บเวอร์ชันแต่ละ component; เปิดครั้งถัดไปอ่านหนึ่งแถวต่อ component แล้วข้าม ห้ามไล่ `CREATE`/`ALTER` ทุกครั้ง
 
-### ตารางสามกลุ่ม: ห้ามสลับวิธี init
+### ตารางสี่ประเภท: ห้ามสลับวิธี init
 
-- **`c_*` (120 reference tables)**: โครงสร้าง/แถวมาจาก `src/main/reference/c-tables.json` เป็น upstream ล้วน ผู้ใช้ไม่แก้; เมื่อเวอร์ชันใหม่ `loadReferenceTables()` ใช้ DROP/สร้าง/โหลดใหม่ทั้งชุดได้
-- **52 แฟ้ม (`person`, `home`, `service`, ...)**: โครงสร้างจาก `src/main/reference/f43-tables.json` ไม่มีแถวติดมา; ต้องรักษาข้อมูล import สะสมเสมอ
-  - `createFileTables()` เป็น additive เท่านั้น: `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
-  - **ห้าม `DROP TABLE`, `DROP COLUMN`, `TRUNCATE` แม้อัปเกรด schema**; เทสต์ต้องยืนยันว่าแถวเดิมอยู่ครบหลัง re-init/upgrade
-- JSON ทั้งคู่สร้างโดย `scripts/pull-reference-tables.mjs` จาก SUB-HDC; รายชื่อ 52 แฟ้มอ่าน `c_file` ห้าม hardcode
-- **กลุ่มที่สามคือตารางของแอปเอง** (`import52files_log`, `structure_check_log`, `observ_check`) สร้างใน `createAppTables()`; **ห้ามตั้งชื่อขึ้นต้น `c_`** เพราะ prefix นี้สงวนให้ reference ของ upstream และ `scripts/test-database.ts` นับตารางที่ `LIKE 'c\_%'` เทียบกับจำนวนที่ `loadReferenceTables()` บันทึกไว้
+ทุกตารางใน `public` อยู่ในประเภทใดประเภทหนึ่งข้างล่างนี้ ตอนเพิ่มตารางใหม่ให้เลือกประเภทก่อน แล้วทำตามวิธี init ของประเภทนั้น
+
+ตอนติดตั้งใหม่ ทุกตารางเป็นหนึ่งในสองแบบนี้ ใช้สองคำนี้เรียกให้ตรงกันทั้งเอกสารและโค้ด
+
+- **fresh table** — ติดตั้งใหม่ได้แค่โครงสร้าง ต้องนับได้ **0 แถว**: ประเภทที่ 3 และ 4; ห้ามมีข้อมูลผู้ใช้หรือแถวตัวอย่างติดมากับตัวติดตั้งเด็ดขาด
+- **initial table** — ติดตั้งใหม่มีแถวตั้งต้นมาด้วย และแถวนั้นมาจากโค้ดหรือไฟล์ใน repo เท่านั้น: ประเภทที่ 1 และ 2 (`schema_init` หนึ่งแถวต่อ component ที่ init จริง, `observ_check` คือทะเบียนกฎจาก `observationRules()` ทุกกฎเริ่มที่ `is_active = true`)
+
+`scripts/test-database.ts` ตรวจทั้งสองแบบทันทีหลัง `openDatabase()` ครั้งแรก
+
+**1. ตารางระบบ (2 ตาราง, initial table)** — สถานะของตัวแอปเอง ไม่ใช่ข้อมูลสุขภาพ
+
+- `schema_init` เก็บเวอร์ชันของแต่ละ component สร้างโดย `ensureInitTable()` ก่อนใครเพื่อน; `observ_check` คือทะเบียนกฎข้อสังเกต ดูหัวข้อ "ทะเบียนข้อสังเกต" ข้างล่าง
+- `observ_check` seed จาก `observationRules()` ทุกครั้งที่แคตตาล็อกเปลี่ยน — แถวเป็นของโค้ด ไม่ใช่ของผู้ใช้ ยกเว้น `observ_check.is_active` ที่เป็นสวิตช์ของผู้ใช้ **ห้ามเขียนทับตอน seed**
+
+**2. ตารางรหัสมาตรฐาน (128 ตาราง ขึ้นต้น `c_` ทั้งหมด, initial table)** — รายการรหัสและพจนานุกรม มาเต็มชุดตั้งแต่ติดตั้ง; ไม่มีข้อมูลผู้ใช้ จึงสร้างใหม่ได้ทั้งชุด แต่มาจากคนละไฟล์และคนละ component
+
+- **พจนานุกรมและทะเบียนหน่วยบริการ (5 ตาราง)**: รายชื่ออยู่ที่ `src/main/reference/tables-in-use.json` ที่เดียว — พจนานุกรมและรายชื่อแฟ้ม (`c_files_schema`, `c_files_desc`, `c_file`) กับทะเบียนหน่วยบริการ (`c_hospital`, `c_hostype`); โครงสร้าง/แถวมาจาก `c-tables.json` เป็น upstream ล้วน ผู้ใช้ไม่แก้ `loadReferenceTables()` DROP/สร้าง/โหลดใหม่ทั้งชุดได้
+  - `c-tables.json` ยังมีตาราง lookup ติดมาครบ แต่ **ไม่ seed** และถูก DROP ทิ้งตอน re-init; **ห้ามเอากลับมาใช้ตรวจรหัส** เพราะสำเนาของมันแตกกันเอง (เช่น `c_home_housetype` มีรหัส 6 แต่ `c_address_housetype` ไม่มี)
+  - เปลี่ยนรายชื่อในไฟล์แล้วต้องบวก `REFERENCE_TABLES_REVISION` ไม่งั้นเครื่องที่ติดตั้งแล้วจะไม่ re-seed
+- **catalog รหัสมาตรฐานของ PlkGap เอง (120 ตาราง)**: ดูหัวข้อ "รหัสมาตรฐาน" ข้างล่าง; `loadStructureCodeTables()` สร้างใหม่ได้ทั้งชุด
+- **เขตปกครอง (3 ตาราง)**: `c_province`, `c_district`, `c_subdistrict` จาก `loadGeographyTables()` — ชื่อและรหัสมาจาก `geography.json` ส่วนคอลัมน์ `geom` เป็น boundary จาก `boundaries.json` ที่ `UPDATE` ทับลงบนแถวชื่อ ไม่ได้แยกเป็นตารางของตัวเอง; DROP/สร้างใหม่ทั้งชุดเมื่อ version เปลี่ยน
+  - รหัสในไฟล์ boundary เป็น `TH65`/`TH6501`/`TH650101` ตัด `TH` ออกแล้วตรงกับ CHANGWAT/AMPUR/TAMBON ของ 43 แฟ้ม; ไม่มีรูปจังหวัดมาตรง ๆ รูปจังหวัดจึงเป็น union ของอำเภอ
+  - สามตารางนี้ **ไม่นับรวมในสถิติรหัสมาตรฐาน**: `databaseStatus()` รวมเฉพาะ component `reference` กับ `structure_codes` และ `scripts/test-database.ts` `NOT IN ('c_province', 'c_district', 'c_subdistrict')` ตอนนับ — เพิ่มตารางภูมิศาสตร์ใหม่ต้องแก้ข้อยกเว้นทั้งสองที่
+
+**3. ตารางข้อมูลบริการตามโครงสร้างมาตรฐานกระทรวงสาธารณสุข (52 แฟ้ม: `person`, `home`, `service`, ..., fresh table)** — ที่เดียวที่เก็บข้อมูลผู้ใช้
+
+- โครงสร้างจาก `src/main/reference/f43-tables.json` ไม่มีแถวติดมา; ต้องรักษาข้อมูล import สะสมเสมอ
+- `createFileTables()` เป็น additive เท่านั้น: `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
+- **ห้าม `DROP TABLE`, `DROP COLUMN`, `TRUNCATE` แม้อัปเกรด schema**; เทสต์ต้องยืนยันว่าแถวเดิมอยู่ครบหลัง re-init/upgrade
+
+**4. ตาราง log (2 ตาราง, fresh table)** — ผลการทำงานที่บันทึกไว้ให้ผู้ใช้ดูย้อนหลัง
+
+- `import52files_log` หนึ่งแถวต่อหนึ่งรอบ import **เป็นข้อมูลผู้ใช้ ต้องรักษาไว้** (`log_import_id` ในแฟ้มอ้างถึงแถวนี้)
+- `structure_check_log` คำนวณใหม่จากแถวที่ import ได้เสมอ จึง DROP/สร้างใหม่ตอนอัปเกรดได้
+
+**กติกาข้ามประเภท**
+
+- ประเภทที่ 1, 3, 4 สร้างใน `createAppTables()`/`createFileTables()` — **ห้ามตั้งชื่อขึ้นต้น `c_`** เพราะ prefix นี้สงวนให้ประเภทที่ 2 และ `scripts/test-database.ts` นับตารางที่ `LIKE 'c\_%'` เทียบกับผลรวมของ `loadReferenceTables()` กับ `loadStructureCodeTables()`; บวก `APP_SCHEMA_VERSION` เมื่อเปลี่ยนรูปตารางระบบหรือ log
+- ประเภทไม่ได้ตรงกับ component ใน `schema_init` แบบหนึ่งต่อหนึ่ง: ประเภทที่ 2 กระจายอยู่ใน `reference`, `structure_codes`, `geography` ส่วนประเภทที่ 1 กับ 4 อยู่ใน `app` (และ `observations` สำหรับแถวในทะเบียน) — **ห้ามเปลี่ยนชื่อ component ให้ตรงประเภท** เพราะเครื่องที่ติดตั้งแล้วจะ init ซ้ำทั้งหมด
+- `c-tables.json` และ `f43-tables.json` สร้างโดย `scripts/pull-reference-tables.mjs`, `geography.json` โดย `scripts/pull-geography.mjs`, `boundaries.json` โดย `scripts/pull-boundaries.mjs`; รายชื่อ 52 แฟ้มอ่าน `c_file` ห้าม hardcode
+- ไฟล์ทุกไฟล์ใน `src/main/reference/` ถูก `import` แบบ static ใน `database.ts` จึงถูก bundle ลง `out/main/index.js` และแพ็กเข้าตัวติดตั้ง; ตารางเกิดตอนเปิดแอปครั้งแรก ไม่ใช่ตอน install
+
+### รหัสมาตรฐาน: `structure-codes.json`
+
+รหัสที่ใช้ตรวจ 52 แฟ้มเป็นแคตตาล็อกของ PlkGap เอง **ไม่ใช้ตาราง lookup ที่ติดมากับ `c-tables.json`** มีสองแหล่งตามลำดับ
+
+1. รายการรหัสมาตรฐานที่เผยแพร่ → `scripts/pull-standard-codes.mjs` → `src/main/reference/standard-codes.json`
+2. `c_files_schema.description` เฉพาะฟิลด์ที่แหล่งแรกไม่ครอบคลุม — **รายการที่เผยแพร่ชนะเสมอ** คำอธิบายในพจนานุกรมห้ามทับ
+
+`scripts/generate-structure-codes.mjs` รวมสองแหล่งเป็น `structure-codes.json` แล้ว `loadStructureCodeTables()` seed ภายใต้ component `structure_codes` **ก่อน** สร้าง api view
+
+- ทุก entry ใน pull script ต้องระบุ `fields` เป็น `<แฟ้ม>.<คอลัมน์>` และ script จะ throw ถ้าฟิลด์นั้นไม่มีใน `c_files_schema`
+- รายการที่ใช้ร่วมกันหลายฟิลด์ทำเป็น **ตารางเดียว + binding หลายเส้น** (`c_instype`, `c_servplace`, `c_chargeitem`, `c_diagtype`, `c_fptype`, `c_housetype`, `c_person_prename`, `c_person_nation`, `c_person_sex`) ห้ามทำสำเนาตารางต่อฟิลด์
+- `ruleTests()` หาตารางจาก binding ก่อน แล้วค่อยตกไปที่สูตรชื่อ `c_<แฟ้ม>_<คอลัมน์>`; **เทสต์บังคับว่าต้องไม่มีฟิลด์ไหนพึ่งสูตรชื่อล้วน** และทุกตารางต้องมี binding หรืออยู่ใน `unbound` พร้อมเหตุผล
+- `c_clinic_department` ตั้งใจไม่ผูก เพราะ `CLINIC` เป็นรหัสประกอบ หลักที่ 4-5 หน่วยบริการกำหนดเอง
+- ลำดับกฎต่อค่า: `required` → `width` → `unitcode` → `code` รายงานเฉพาะข้อแรกที่ตก — กฎหลังต้องข้ามค่าที่กฎก่อนหน้ารายงานไปแล้วเสมอ ไม่งั้นแถวเดียวถูกนับซ้ำ
+- ฟิลด์ที่รายการรหัสมีค่ายาวกว่าความกว้างในพจนานุกรม (`epi.vaccinetype` เป็น C3 แต่มี `HPVG91`) **ไม่ตรวจ width** ตัดสินด้วยรายการอย่างเดียว และกฎ `code` ต้องเห็นทุกค่าที่ไม่ว่าง ไม่งั้นค่ายาวผิด ๆ จะรอดทุกกฎ
+- **รหัสที่มาตรฐานถอดออกแล้วถือว่าผิด** ไม่ใช่ผ่านแบบ historical เพราะรหัสที่ยกเลิกมีตัวแทนเสมอ; ข้อความกฎ `code` คือ `ไม่ตรงตามรหัสมาตรฐาน` ไม่ต้องบอกชื่อตารางรหัสในข้อความ — หน้าจอมีปุ่มชื่อฟิลด์ที่เปิดรายการรหัสจาก `finding.reference` อยู่แล้ว
+- ฟิลด์รหัสหน่วยบริการต้องเป็นตัวเลขครบตามความกว้าง (5 หรือ 9); คัดฟิลด์จากข้อความในพจนานุกรมด้วย `UNIT_CODE_FIELD` ห้าม hardcode รายชื่อ — `clinic`, `ward*`, `drg`, `an*` กว้างเท่ากันแต่ไม่ใช่รหัสหน่วยบริการ
+- รายละเอียดการตัดสินใจแต่ละข้ออยู่ใน `STRUCTURE_CODE_AUDIT.md`
 
 ### ทะเบียนข้อสังเกต `observ_check`
 
@@ -72,7 +136,12 @@ Embedded PostgreSQL (WASM) ใน Electron; ไม่มี server/พอร์�
 - SQL ของทุกกฎอยู่ใน `observationRules()` (`database.ts`) เท่านั้น **ห้ามย้าย SQL ลงตาราง**; ทะเบียนเก็บเฉพาะ `rule_id`, `table_name`, `detail`, `level`, `sort_order`, `is_active`
 - `syncObservationRules()` เป็นตัวเดียวที่เขียนทะเบียน: เพิ่มกฎใหม่ อัปเดตข้อความ/ลำดับ/ระดับ และลบแถวของกฎที่ถูกถอดจากโค้ด — **ห้ามเขียนทับ `is_active`** เพราะเป็นสวิตช์ของผู้ใช้
 - version ของ component `observations` เป็น digest ของแคตตาล็อก จึงไม่เขียนอะไรเมื่อไม่มีอะไรเปลี่ยน
-- `level` มีสองค่า: `error` เมื่อแถวเป็นจริงพร้อมกันไม่ได้ และ `warning` เมื่อแค่ดูผิดปกติและต้องให้คนตัดสิน
+- `level` มีสองค่า: `error` เมื่อแถวเป็นจริงพร้อมกันไม่ได้ และ `warning` เมื่อแค่ดูผิดปกติและต้องให้คนตัดสิน — เก็บไว้ในทะเบียน แต่**หน้าจอไม่แสดงระดับ** ทั้งในผลตรวจและตัวเลือกกฎ
+
+**ขอบเขตการค้น**: แถวที่ *รายงาน* จำกัดที่ zip ที่ตรวจเสมอ (`importedFromZip` บนแฟ้มตั้งต้น) แต่แถวที่ใช้ *เทียบ* ค้นข้าม zip ได้ทั้งฐาน — **ต้องผูก `hospcode` เท่ากันทุกครั้ง** เพราะ PID/HID/CID เป็นเลขภายในของแต่ละหน่วยบริการ คนละ `hospcode` คือคนละทะเบียน
+
+- ทุก join/subquery ข้ามแฟ้มต้องมี `hospcode` เป็นเงื่อนไขแรก (`p.hospcode = s.hospcode AND p.pid = s.pid`); `duplicate-cid` นับ CID ซ้ำข้าม zip ด้วย `PARTITION`/`GROUP BY hospcode, cid`
+- กฎที่นับข้าม zip ให้ group ครั้งเดียวแล้ว join ห้ามยิง subquery ต่อแถว เพราะ PERSON โตได้เป็นล้านแถว
 
 **เพิ่มกฎใหม่ 2 จุด**: เพิ่มค่าใน `ObservationRuleId` (`api.ts`) แล้วเพิ่ม entry ใน `observationRules()` พร้อม `level`, `columns`, `sql` ที่มี `eligible`/`failed` และ scope ด้วย `importedFromZip` บนแฟ้มตั้งต้น
 ทะเบียนรับกฎเข้าเองตอนเปิดแอปครั้งถัดไป ไม่ต้องแตะ IPC/preload/หน้าจอ
@@ -101,6 +170,7 @@ Renderer ใช้ `window.api` (type มีใน `env.d.ts` แล้ว); cha
 ### เทสต์
 
 - `scripts/test-database.ts` เรียก database.ts บน temp dir; เพิ่มเคสเมื่อเพิ่มตรรกะ DB
+- เทสต์เทียบ `buildStructureCodes(referenceData)` กับ `structure-codes.json` แบบ deepEqual **ต้องรัน `generate-structure-codes.mjs` ทุกครั้งที่แก้ generator หรือดึงข้อมูลใหม่** ไม่งั้นเทสต์ตก
 - `scripts/test-electron.mjs` รันแอปจริงด้วย Playwright; ใช้ `PLKGAP_TEST_DATA_DIR` redirect userData เพื่อไม่แตะข้อมูลจริง
 - Stub `dialog.showMessageBox` ผ่าน `application.evaluate` เพราะ Playwright คลิก native dialog ไม่ได้; แก้ flow ปิดแอปต้องอัปเดต stub เพื่อไม่ให้เทสต์ค้าง
 - เทสต์ต้องต่อเน็ตและตรวจ tile `naturalWidth > 0` ไม่ใช่เพียงมี `<img>` เพื่อจับ CSP บล็อกภาพ

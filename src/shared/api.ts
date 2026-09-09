@@ -1,3 +1,22 @@
+export interface GatewayState {
+  enabled: boolean
+  listening: boolean
+  port: number
+  error?: string
+}
+
+export interface SsoProfile {
+  sub: string
+  name: string
+  position: string
+  organization: string
+}
+export interface SsoState {
+  status: 'signed-out' | 'signing-in' | 'signed-in'
+  profile: SsoProfile | null
+  error?: string
+}
+
 export interface DatabaseStatus {
   version: string
   postgis: string
@@ -10,7 +29,7 @@ export interface DatabaseStatus {
   fileTables: number
 }
 
-/** One service unit as recorded in the SUB-HDC `c_hospital` reference table. */
+/** One service unit as recorded in the `c_hospital` reference table. */
 export interface Hospital {
   hospcode: string
   hospname: string
@@ -55,6 +74,18 @@ export interface ImportProgress {
   rowCount: number
 }
 
+/** Progress pushed from the main process while a quality check runs. */
+export interface CheckProgress {
+  /** Which of the two checks is running, so the status bar can name it. */
+  kind: 'structure' | 'observations'
+  zipName: string
+  percent: number
+  /** What it is working on right now: a 43-file name, or the file an observation rule reads. */
+  step: string
+  done: number
+  total: number
+}
+
 /** Outcome of one import run. */
 export interface ImportResult {
   runId: number
@@ -88,6 +119,15 @@ export interface StructureFinding {
   /** How many of them broke the rule. */
   found: number
   level: string
+  /** The `c_*` code list this field is validated against, when the database holds one. */
+  reference?: string
+}
+
+/** A whole `c_*` code list, for looking up what a field is allowed to contain. */
+export interface ReferenceCodeList {
+  table: string
+  columns: string[]
+  rows: string[][]
 }
 
 /** A sample of the rows behind one finding. */
@@ -95,6 +135,7 @@ export interface FailingRows {
   tableName: string
   columnName: string
   detail: string
+  /** Structure checks end with `เกณฑ์`, naming the rule each record broke. */
   columns: string[]
   rows: string[][]
   total: number
@@ -167,6 +208,12 @@ export interface UpdateState {
 }
 
 export interface AppApi {
+  gatewayState: () => Promise<GatewayState>
+  setGatewayEnabled: (enabled: boolean) => Promise<GatewayState>
+  ssoState: () => Promise<SsoState>
+  ssoLogin: () => Promise<SsoState>
+  ssoLogout: () => Promise<SsoState>
+  onSsoState: (callback: (state: SsoState) => void) => () => void
   updateState: () => Promise<UpdateState>
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<void>
@@ -193,8 +240,11 @@ export interface AppApi {
   setObservationRuleActive: (rule: ObservationRuleId, active: boolean) => Promise<void>
   /** The stored result of the last structure check of a zip, if there is one. */
   structureResult: (zipName: string) => Promise<StructureCheckResult | null>
-  /** The actual rows behind one finding, capped to a readable sample. */
-  failingRows: (zipName: string, tableName: string, columnName: string, rule: string) => Promise<FailingRows>
+  /** The actual rows behind a field's findings, capped to a readable sample. Omit `rule` for every
+   * rule of that field; each record still names the one it broke. */
+  failingRows: (zipName: string, tableName: string, columnName: string, rule?: string) => Promise<FailingRows>
+  /** Every row of one `c_*` code list, named by a finding's `reference`. */
+  referenceCodes: (table: string) => Promise<ReferenceCodeList>
   /** Past import runs, newest first. The history is append-only — it cannot be cleared. */
   listImportLog: () => Promise<ImportLogEntry[]>
   /** Checks a zip before import: it must hold the 52 standard files and nothing else. */
@@ -202,6 +252,8 @@ export interface AppApi {
   /** Imports a checked zip into the 52 tables and records the run in the history. */
   runImport: (path: string) => Promise<ImportResult>
   onImportProgress: (callback: (progress: ImportProgress) => void) => () => void
+  /** Fires while either quality check runs; returns the unsubscribe. */
+  onCheckProgress: (callback: (progress: CheckProgress) => void) => () => void
   minimizeWindow: () => Promise<void>
   toggleMaximizeWindow: () => Promise<void>
   closeWindow: () => Promise<void>

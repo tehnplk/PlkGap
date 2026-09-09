@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent } from 'react'
 import type { DatabaseStatus } from '../../shared/api'
+import { CheckProgress } from './CheckProgress'
+import { LoginRequiredDialog } from './LoginRequiredDialog'
+import { useRememberedAccount } from './useRememberedAccount'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
 import { Import52Files } from './pages/files43/Import52Files'
@@ -92,6 +95,13 @@ export function App() {
   const [status, setStatus] = useState<DatabaseStatus>()
   const [error, setError] = useState('')
   const [windows, setWindows] = useState<Child[]>([])
+  const [loginRequired, setLoginRequired] = useState(false)
+  const { signedIn } = useRememberedAccount()
+  // A dev run is never gated: `npm run dev` reloads on every edit, and the shipped bundle is
+  // the one that enforces this. Either way it is only the shell pointing at the sign-in button.
+  const gated = !import.meta.env.DEV && !signedIn
+  // Logging out closes what the gate would no longer let anyone open.
+  useEffect(() => { if (gated) { setWindows([]); setLoginRequired(false) } }, [gated])
   const [menu, setMenu] = useState<string | null>(null)
   const [statusbar, setStatusbar] = useState(true)
   const workspace = useRef<HTMLDivElement>(null)
@@ -140,7 +150,10 @@ export function App() {
     }
   }
 
+  // Every menu and every sidebar item opens a page through here, so the sign-in gate lives here
+  // too. It is the shell saying where to sign in, not authorization: that belongs to main.
   function open(id: Kind) {
+    if (gated) { setLoginRequired(true); return }
     if (windows.some((item) => item.id === id)) { focus(id); return }
     const area = workspace.current!
     setWindows((items) => [...items, createChildWindow(id, area, items.length)])
@@ -214,6 +227,7 @@ export function App() {
     </TitleBar>
     <div className="desktop-body">
       <Sidebar activeId={active?.id} groups={groups.map((group) => ({ id: group.id, label: group.label, icon: group.icon, collapsed: group.collapsed, items: group.items.map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) })) }))} />
+    <div className="child-area">
     <div className="workspace" ref={workspace} aria-label="MDI workspace">
       {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
         <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
@@ -236,7 +250,9 @@ export function App() {
       </section>)}
     {windows.some((item) => item.minimized) && <div className="window-dock" aria-label="Open windows">{windows.filter((item) => item.minimized).map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${windowTitle(item.id)}` : windowTitle(item.id)}><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
     </div>
+    {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>{status ? `${status.referenceTables} ตารางอ้างอิง · ${status.referenceRows.toLocaleString('en-US')} รายการ · ${status.fileTables} แฟ้มพร้อมนำเข้า` : 'Local database'}</span><span className="status-end">{active ? windowTitle(active.id) : 'Ready'}<span className="status-divider" />PlkGap<CheckProgress /></span></footer>}
     </div>
-    {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>{status ? `${status.referenceTables} ตารางอ้างอิง · ${status.referenceRows.toLocaleString('en-US')} รายการ · ${status.fileTables} แฟ้มพร้อมนำเข้า` : 'Local database'}</span><span className="status-end">{active ? windowTitle(active.id) : 'Ready'}<span className="status-divider" />PlkGap</span></footer>}
+    </div>
+    <LoginRequiredDialog open={loginRequired} onClose={() => setLoginRequired(false)} />
   </main>
 }
