@@ -11,7 +11,7 @@ import { basename, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { apiPort, startApiServer } from './server'
 import { createGateway } from './gateway'
-import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, referenceCodeList, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
+import { databaseStatus, finishImportRun, findHospital, getD506Report, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, referenceCodeList, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
 import { checkImportZip, eachZipTextEntry, parsePipeFile } from './Import52Files'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { CheckProgress } from '../shared/api'
@@ -334,6 +334,10 @@ if (!app.requestSingleInstanceLock()) {
       return { runId, files, rowCount }
       } finally { activeImports -= 1 }
     })
+    ipcMain.handle('d506:report', (event, year: unknown) => {
+      authorizedWindow(event)
+      return getD506Report(db!, Number(year) || 2569)
+    })
     createWindow(() => splash.close())
     void sso.restore()
     updater.start()
@@ -375,6 +379,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('import:log')
     ipcMain.removeHandler('import:check-file')
     ipcMain.removeHandler('import:run')
+    ipcMain.removeHandler('d506:report')
     void Promise.resolve(api?.close()).catch(console.error)
       .then(() => db!.close()).catch(console.error).finally(() => app.exit())
   })

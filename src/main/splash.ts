@@ -18,7 +18,7 @@ const phases: Record<string, string> = {
   api: 'เตรียมมุมมองสำหรับ API',
 }
 
-const page = (version: string) => `data:text/html;charset=utf-8,${encodeURIComponent(`
+const page = (version: string, initialSeconds: number) => `data:text/html;charset=utf-8,${encodeURIComponent(`
 <!doctype html><html lang="th"><head><meta charset="utf-8"><title>PlkGap</title><style>
   * { box-sizing: border-box; }
   body { margin: 0; height: 100vh; display: flex; flex-direction: column; justify-content: center;
@@ -29,19 +29,25 @@ const page = (version: string) => `data:text/html;charset=utf-8,${encodeURICompo
   /* The version rides on the title line, small enough not to compete with the name. */
   h1 span { margin-left: 10px; font-size: 13px; font-weight: 500; letter-spacing: 0; color: #6d607d; }
   p { margin: 0; font-size: 12px; color: #6d607d; }
-  #status { min-height: 16px; font-size: 12px; color: #473655; }
+  .status-container { display: flex; justify-content: space-between; align-items: center; min-height: 18px; }
+  #status { font-size: 12px; color: #473655; }
+  #countdown { font-size: 12px; font-weight: 600; color: #7843b5; }
   .bar { height: 5px; border-radius: 4px; background: #e2d5f4; overflow: hidden; }
   .bar span { display: block; width: 40%; height: 100%; border-radius: 4px; background: #7843b5;
     animation: slide 1.1s ease-in-out infinite; }
+  .bar.ready span { width: 100%; animation: none; background: #7843b5; transition: width 0.3s ease; }
   @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
 </style></head><body>
   <h1>PLK GAP <span>version ${version}</span></h1>
   <p>ระบบตรวจคุณภาพข้อมูล 43 แฟ้ม</p>
-  <div class="bar"><span></span></div>
-  <p id="status">กำลังเริ่มต้น...</p>
+  <div class="bar" id="progress-bar"><span></span></div>
+  <div class="status-container">
+    <p id="status">กำลังเริ่มต้น...</p>
+    <p id="countdown">${initialSeconds > 0 ? `เปิดใน ${initialSeconds} วินาที` : ''}</p>
+  </div>
 </body></html>`)}`
 
-export function createSplash(version: string) {
+export function createSplash(version: string, initialSeconds = process.env.PLKGAP_TEST_DATA_DIR ? 1 : 3) {
   const window = new BrowserWindow({
     width: 420,
     height: 220,
@@ -58,8 +64,28 @@ export function createSplash(version: string) {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   window.once('ready-to-show', () => { if (!window.isDestroyed()) window.showInactive() })
-  void window.loadURL(page(version))
+  void window.loadURL(page(version, initialSeconds))
   const shownAt = Date.now()
+
+  let remaining = initialSeconds
+  const timer = setInterval(() => {
+    remaining--
+    if (window.isDestroyed()) {
+      clearInterval(timer)
+      return
+    }
+    if (remaining > 0) {
+      void window.webContents.executeJavaScript(
+        `document.getElementById('countdown').textContent = 'เปิดใน ${remaining} วินาที'`
+      ).catch(() => {})
+    } else {
+      void window.webContents.executeJavaScript(
+        `document.getElementById('countdown').textContent = 'กำลังเปิด...'`
+      ).catch(() => {})
+      clearInterval(timer)
+    }
+  }, 1000)
+
   return {
     phase(name: string) {
       const label = phases[name] ?? name
@@ -67,10 +93,35 @@ export function createSplash(version: string) {
       void window.webContents.executeJavaScript(
         `document.getElementById('status').textContent = ${JSON.stringify(label)}`).catch(() => {})
     },
-    /** Never blink: a warm start finishes in milliseconds, and a flash reads as a glitch. */
-    async close(minimumMs = 700) {
-      const left = minimumMs - (Date.now() - shownAt)
-      if (left > 0) await new Promise((resolve) => setTimeout(resolve, left))
+    /** Closes splash once both database is ready and initial countdown has elapsed */
+    async close(minimumMs = initialSeconds * 1000) {
+      clearInterval(timer)
+      if (window.isDestroyed()) return
+
+      if (minimumMs > 0) {
+        const elapsed = Date.now() - shownAt
+        const left = minimumMs - elapsed
+        if (left > 0) {
+          await new Promise((resolve) => setTimeout(resolve, left))
+        }
+
+        if (!window.isDestroyed()) {
+          await window.webContents.executeJavaScript(`
+            (function() {
+              const status = document.getElementById('status');
+              const countdown = document.getElementById('countdown');
+              const bar = document.getElementById('progress-bar');
+              if (status && status.textContent.trim() === 'กำลังเริ่มต้น...') {
+                status.textContent = 'พร้อมใช้งาน';
+              }
+              if (countdown) countdown.textContent = 'กำลังเปิด...';
+              if (bar) bar.classList.add('ready');
+            })()
+          `).catch(() => {})
+          await new Promise((resolve) => setTimeout(resolve, 150))
+        }
+      }
+
       if (!window.isDestroyed()) window.destroy()
     },
   }
