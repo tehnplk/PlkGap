@@ -18,7 +18,7 @@ const phases: Record<string, string> = {
   api: 'เตรียมมุมมองสำหรับ API',
 }
 
-const page = (version: string) => `data:text/html;charset=utf-8,${encodeURIComponent(`
+const page = (version: string, initialSeconds: number) => `data:text/html;charset=utf-8,${encodeURIComponent(`
 <!doctype html><html lang="th"><head><meta charset="utf-8"><title>PlkGap</title><style>
   * { box-sizing: border-box; }
   body { margin: 0; height: 100vh; display: flex; flex-direction: column; justify-content: center;
@@ -43,11 +43,11 @@ const page = (version: string) => `data:text/html;charset=utf-8,${encodeURICompo
   <div class="bar" id="progress-bar"><span></span></div>
   <div class="status-container">
     <p id="status">กำลังเริ่มต้น...</p>
-    <p id="countdown"></p>
+    <p id="countdown">${initialSeconds > 0 ? `เปิดใน ${initialSeconds} วินาที` : ''}</p>
   </div>
 </body></html>`)}`
 
-export function createSplash(version: string) {
+export function createSplash(version: string, initialSeconds = process.env.PLKGAP_TEST_DATA_DIR ? 1 : 3) {
   const window = new BrowserWindow({
     width: 420,
     height: 220,
@@ -64,8 +64,28 @@ export function createSplash(version: string) {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   window.once('ready-to-show', () => { if (!window.isDestroyed()) window.showInactive() })
-  void window.loadURL(page(version))
+  void window.loadURL(page(version, initialSeconds))
   const shownAt = Date.now()
+
+  let remaining = initialSeconds
+  const timer = setInterval(() => {
+    remaining--
+    if (window.isDestroyed()) {
+      clearInterval(timer)
+      return
+    }
+    if (remaining > 0) {
+      void window.webContents.executeJavaScript(
+        `document.getElementById('countdown').textContent = 'เปิดใน ${remaining} วินาที'`
+      ).catch(() => {})
+    } else {
+      void window.webContents.executeJavaScript(
+        `document.getElementById('countdown').textContent = 'กำลังเปิด...'`
+      ).catch(() => {})
+      clearInterval(timer)
+    }
+  }, 1000)
+
   return {
     phase(name: string) {
       const label = phases[name] ?? name
@@ -73,37 +93,29 @@ export function createSplash(version: string) {
       void window.webContents.executeJavaScript(
         `document.getElementById('status').textContent = ${JSON.stringify(label)}`).catch(() => {})
     },
-    /** Countdown before entering the main window, with immediate destruction on 0 */
-    async close(countdownSeconds = process.env.PLKGAP_TEST_DATA_DIR ? 1 : 3) {
+    /** Closes splash once both database is ready and initial countdown has elapsed */
+    async close(minimumMs = initialSeconds * 1000) {
+      clearInterval(timer)
       if (window.isDestroyed()) return
 
-      if (countdownSeconds > 0) {
-        // Ensure at least a minimum display time so warm starts don't flash
+      if (minimumMs > 0) {
         const elapsed = Date.now() - shownAt
-        if (elapsed < 500) await new Promise((resolve) => setTimeout(resolve, 500 - elapsed))
-
-        for (let remaining = countdownSeconds; remaining > 0; remaining--) {
-          if (window.isDestroyed()) return
-          await window.webContents.executeJavaScript(`
-            (function() {
-              const status = document.getElementById('status');
-              const countdown = document.getElementById('countdown');
-              const bar = document.getElementById('progress-bar');
-              if (status && (!status.textContent || status.textContent.trim() === 'กำลังเริ่มต้น...')) {
-                status.textContent = 'พร้อมใช้งาน';
-              }
-              if (countdown) countdown.textContent = 'เปิดโปรแกรมใน ' + ${remaining} + ' วินาที';
-              if (bar) bar.classList.add('ready');
-            })()
-          `).catch(() => {})
-          await new Promise((resolve) => setTimeout(resolve, 1000))
+        const left = minimumMs - elapsed
+        if (left > 0) {
+          await new Promise((resolve) => setTimeout(resolve, left))
         }
 
         if (!window.isDestroyed()) {
           await window.webContents.executeJavaScript(`
             (function() {
+              const status = document.getElementById('status');
               const countdown = document.getElementById('countdown');
+              const bar = document.getElementById('progress-bar');
+              if (status && status.textContent.trim() === 'กำลังเริ่มต้น...') {
+                status.textContent = 'พร้อมใช้งาน';
+              }
               if (countdown) countdown.textContent = 'กำลังเปิด...';
+              if (bar) bar.classList.add('ready');
             })()
           `).catch(() => {})
           await new Promise((resolve) => setTimeout(resolve, 150))

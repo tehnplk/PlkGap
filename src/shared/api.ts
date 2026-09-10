@@ -219,7 +219,34 @@ export interface IndicatorReport {
   period: string; start: string; end: string; processedAt: string; indicators: IndicatorResult[]
 }
 
+export interface D506Item {
+  rank: number
+  code506: string
+  icd10: string
+  name: string
+  cases: number
+  deaths: number
+  attackRate: number
+  caseFatalityRate: number
+  trend: 'up' | 'stable' | 'down'
+}
+
+export interface D506Report {
+  year: number
+  population: number
+  totalCases: number
+  totalDeaths: number
+  overallAttackRate: number
+  overallCfr: number
+  topDisease: string
+  availableYears: number[]
+  hasRealData: boolean
+  totalSurveillanceRows: number
+  items: D506Item[]
+}
+
 export interface AppApi {
+  getD506Report: (year: number) => Promise<D506Report>
   listMessageVillages: () => Promise<{ id: string; label: string }[]>
   processIndicators: (period: string) => Promise<IndicatorReport>
   saveIndicatorWorkbook: (period: string, bytes: Uint8Array | number[]) => Promise<boolean>
