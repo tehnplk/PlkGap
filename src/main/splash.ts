@@ -29,16 +29,22 @@ const page = (version: string) => `data:text/html;charset=utf-8,${encodeURICompo
   /* The version rides on the title line, small enough not to compete with the name. */
   h1 span { margin-left: 10px; font-size: 13px; font-weight: 500; letter-spacing: 0; color: #6d607d; }
   p { margin: 0; font-size: 12px; color: #6d607d; }
-  #status { min-height: 16px; font-size: 12px; color: #473655; }
+  .status-container { display: flex; justify-content: space-between; align-items: center; min-height: 18px; }
+  #status { font-size: 12px; color: #473655; }
+  #countdown { font-size: 12px; font-weight: 600; color: #7843b5; }
   .bar { height: 5px; border-radius: 4px; background: #e2d5f4; overflow: hidden; }
   .bar span { display: block; width: 40%; height: 100%; border-radius: 4px; background: #7843b5;
     animation: slide 1.1s ease-in-out infinite; }
+  .bar.ready span { width: 100%; animation: none; background: #7843b5; transition: width 0.3s ease; }
   @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
 </style></head><body>
   <h1>PLK GAP <span>version ${version}</span></h1>
   <p>ระบบตรวจคุณภาพข้อมูล 43 แฟ้ม</p>
-  <div class="bar"><span></span></div>
-  <p id="status">กำลังเริ่มต้น...</p>
+  <div class="bar" id="progress-bar"><span></span></div>
+  <div class="status-container">
+    <p id="status">กำลังเริ่มต้น...</p>
+    <p id="countdown"></p>
+  </div>
 </body></html>`)}`
 
 export function createSplash(version: string) {
@@ -67,10 +73,43 @@ export function createSplash(version: string) {
       void window.webContents.executeJavaScript(
         `document.getElementById('status').textContent = ${JSON.stringify(label)}`).catch(() => {})
     },
-    /** Never blink: a warm start finishes in milliseconds, and a flash reads as a glitch. */
-    async close(minimumMs = 700) {
-      const left = minimumMs - (Date.now() - shownAt)
-      if (left > 0) await new Promise((resolve) => setTimeout(resolve, left))
+    /** Countdown before entering the main window, with immediate destruction on 0 */
+    async close(countdownSeconds = process.env.PLKGAP_TEST_DATA_DIR ? 1 : 3) {
+      if (window.isDestroyed()) return
+
+      if (countdownSeconds > 0) {
+        // Ensure at least a minimum display time so warm starts don't flash
+        const elapsed = Date.now() - shownAt
+        if (elapsed < 500) await new Promise((resolve) => setTimeout(resolve, 500 - elapsed))
+
+        for (let remaining = countdownSeconds; remaining > 0; remaining--) {
+          if (window.isDestroyed()) return
+          await window.webContents.executeJavaScript(`
+            (function() {
+              const status = document.getElementById('status');
+              const countdown = document.getElementById('countdown');
+              const bar = document.getElementById('progress-bar');
+              if (status && (!status.textContent || status.textContent.trim() === 'กำลังเริ่มต้น...')) {
+                status.textContent = 'พร้อมใช้งาน';
+              }
+              if (countdown) countdown.textContent = 'เปิดโปรแกรมใน ' + ${remaining} + ' วินาที';
+              if (bar) bar.classList.add('ready');
+            })()
+          `).catch(() => {})
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+
+        if (!window.isDestroyed()) {
+          await window.webContents.executeJavaScript(`
+            (function() {
+              const countdown = document.getElementById('countdown');
+              if (countdown) countdown.textContent = 'กำลังเปิด...';
+            })()
+          `).catch(() => {})
+          await new Promise((resolve) => setTimeout(resolve, 150))
+        }
+      }
+
       if (!window.isDestroyed()) window.destroy()
     },
   }
