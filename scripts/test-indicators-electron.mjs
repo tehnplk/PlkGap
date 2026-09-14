@@ -33,7 +33,7 @@ try {
   await page.getByRole('button', { name: 'เข้าสู่ระบบ', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.indicatorLoginUrl)).not.toBe('')
   assert.equal((await fetch(await application.evaluate(() => globalThis.indicatorLoginUrl))).status, 200)
-  await expect(page.getByRole('button', { name: 'สมชาย ทดสอบระบบ', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'นายสมชาย ทดสอบระบบ', exact: true })).toBeVisible()
   await page.getByRole('navigation', { name: 'Sidebar navigation' }).getByRole('button', { name: 'เทมเพลตตัวชี้วัด', exact: true }).click()
   await page.locator('#kpi-period').selectOption('2569-Q4')
   await expect(page.getByRole('button', { name: 'ส่งออก Excel', exact: true })).toBeDisabled()

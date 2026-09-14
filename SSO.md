@@ -38,9 +38,25 @@ renderer, configuration, or repository.
 
 `sso.ts` runs in the main process. A login opens the operating system browser through
 `shell.openExternal`, uses a one-time loopback listener, and sends PKCE S256, state, and nonce.
-Callbacks validate state and exchange the code once. ID tokens must have a valid RS256
+Callbacks validate state and exchange the code once. A successful callback never raises the
+app by itself: it shows a confirmation dialog in the browser, and only its **ตกลง** button
+requests `GET /focus?state=<the same state value>` on the loopback listener, which brings the
+already-open window forward. The state check stops any other local process from calling it.
+Raising uses a momentary always-on-top because Windows refuses foreground to a background
+process. ID tokens must have a valid RS256
 signature, issuer, audience, expiry, nonce, and subject; UserInfo must match that subject.
 The renderer receives only login status and the name, position, and organization.
+
+UserInfo claim names differ between SSO deployments, so `profile()` reads both spellings:
+name from `name`, otherwise `prename` + `fname` + `lname`; position from `position`,
+otherwise `job_position`; organization from `hname`, otherwise `org_name`. The current
+discovery document publishes only the second spelling in `claims_supported`, while
+`llm.txt` still documents the first. Keep both until the older spelling is retired,
+and check `claims_supported` before assuming a claim name.
+
+The `cid` scope described in `llm.txt` is not offered by the production discovery
+document (`scopes_supported` is `openid profile email organization`), so the app does
+not request it and stores no `hash_cid`.
 
 The verified account profile and access token are stored with OS-backed Electron `safeStorage` in
 `userData/sso-session.bin`; no token reaches renderer storage or IPC responses.
@@ -211,9 +227,12 @@ Login). Document that requirement separately from local account persistence.
   active status and **PUBLIC + PKCE** registration. Do not add a client secret.
 - Register exactly `http://127.0.0.1/callback`. Runtime callback URLs include a
   temporary port; do not fix or copy that port into the registration.
-- The callback listener closes after completion. Reloading its URL can show
-  `ERR_CONNECTION_REFUSED`; start a fresh login from the app when needed.
-- A successful callback displays `เข้าสู่ระบบสำเร็จ กลับไปที่ PLK GAP ได้ และปิดหน้านี้ได้เลย`.
+- The callback listener stays up for two minutes after a successful login so the
+  confirmation dialog's **ตกลง** button works, then closes. Logout and app exit close it
+  immediately. Reloading a callback URL after that shows `ERR_CONNECTION_REFUSED`;
+  start a fresh login from the app when needed. The account is already signed in at that
+  point, so a missed confirmation only means the window was not brought forward.
+- A successful callback displays `เข้าสู่ระบบสำเร็จ กดตกลงเพื่อเปิดหน้าต่าง PLK GAP`.
   Check that response and the app account state before diagnosing a failure.
 - Main-process diagnostics identify the failing phase and sanitized OAuth error.
   Do not log credentials, authorization codes, tokens or full token responses.

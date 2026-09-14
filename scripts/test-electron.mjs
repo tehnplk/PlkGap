@@ -121,7 +121,7 @@ try {
   const authorizationUrl = await application.evaluate(() => globalThis.testSsoBrowserUrl)
   assert.equal(new URL(authorizationUrl).origin, testSso.issuer, 'login uses the system-browser entry point')
   assert.equal((await fetch(authorizationUrl)).status, 200)
-  const account = page.getByRole('button', { name: 'สมชาย ทดสอบระบบ', exact: true })
+  const account = page.getByRole('button', { name: 'นายสมชาย ทดสอบระบบ', exact: true })
   await expect(account).toBeVisible()
   await account.click()
   const accountPopup = page.getByRole('dialog', { name: 'บัญชีผู้ใช้', exact: true })

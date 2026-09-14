@@ -59,8 +59,9 @@ export async function startSsoTestServer() {
           return json(401, { error: 'invalid_token' })
         }
         return json(200, { sub: behavior.failure === 'subject' ? 'wrong-subject' : 'test-provider',
-          name: 'สมชาย ทดสอบระบบ', position: 'นักวิชาการสาธารณสุข', hname: 'สำนักงานสาธารณสุขจังหวัดพิษณุโลก',
-          provider_id: 'test-only', email: 'unused@example.test', hoscode: 'test' })
+          prename: 'นาย', fname: 'สมชาย', lname: 'ทดสอบระบบ', job_position: 'นักวิชาการสาธารณสุข',
+          org_name: 'สำนักงานสาธารณสุขจังหวัดพิษณุโลก',
+          user_id: 'test-only', email: 'unused@example.test', org_code: 'test' })
       }
       if (url.pathname === '/revoke') {
         let raw = ''

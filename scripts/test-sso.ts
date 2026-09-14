@@ -8,10 +8,11 @@ async function main() {
   let saved: SsoSession | null = null
   let browserUrl = ''
   const states: unknown[] = []
+  let focused = 0
   const options = { issuer: server.issuer, clientId: 'plkgap-test-client', allowLoopbackIssuer: true,
     openBrowser: async (url: string) => { browserUrl = url },
     store: { read: async () => saved, write: async (value: SsoSession) => { saved = value }, clear: async () => { saved = null } },
-    publish: (state: unknown) => states.push(state) }
+    publish: (state: unknown) => states.push(state), onSignedIn: () => { focused++ } }
   let auth = createSso(options)
   const complete = () => fetch(browserUrl)
   try {
@@ -30,13 +31,23 @@ async function main() {
     assert.equal(auth.snapshot().status, 'signing-in', 'wrong state does not consume the legitimate login')
     assert.equal(server.calls.token.length, 0)
     assert.equal((await complete()).status, 200)
-    assert.deepEqual(auth.snapshot().profile, { sub: 'test-provider', name: 'สมชาย ทดสอบระบบ',
+    assert.deepEqual(auth.snapshot().profile, { sub: 'test-provider', name: 'นายสมชาย ทดสอบระบบ',
       position: 'นักวิชาการสาธารณสุข', organization: 'สำนักงานสาธารณสุขจังหวัดพิษณุโลก' })
     assert.ok(saved)
     const token = (saved as SsoSession).accessToken
     assert.ok(!JSON.stringify(states).includes(token), 'renderer events never contain tokens')
     assert.equal(server.calls.token[0].client_secret, undefined)
+    assert.equal(focused, 0, 'a successful login never raises the window on its own')
+    const focus = new URL(authorization.searchParams.get('redirect_uri')!)
+    focus.pathname = '/focus'
+    focus.search = '?state=wrong'
+    assert.equal((await fetch(focus)).status, 400, 'another local process cannot raise the window')
+    assert.equal(focused, 0)
+    focus.search = `?state=${encodeURIComponent(authorization.searchParams.get('state')!)}`
+    assert.equal((await fetch(focus)).status, 200)
+    assert.equal(focused, 1, 'confirming the success dialog raises the window')
     auth.stop()
+    assert.equal((await fetch(focus).catch(() => ({ status: 0 }))).status, 0, 'the listener closes on exit')
     auth = createSso(options)
     assert.equal((await auth.restore()).status, 'signed-in', 'encrypted remembered account survives restart')
     await auth.logout()

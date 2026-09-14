@@ -133,7 +133,16 @@ if (!app.requestSingleInstanceLock()) {
       publish: (state) => {
         if (window && !window.webContents.isDestroyed()) window.webContents.send('sso:state', state)
       },
-      onSignedIn: () => { if (window?.isMinimized()) window.restore(); window?.focus() },
+      onSignedIn: () => {
+        if (!window || window.isDestroyed()) return
+        if (window.isMinimized()) window.restore()
+        // Windows refuses foreground to a background process, so focus() alone only flashes the
+        // taskbar. A momentary always-on-top raises the existing window instead.
+        window.setAlwaysOnTop(true)
+        window.show()
+        window.focus()
+        window.setAlwaysOnTop(false)
+      },
     })
     ipcMain.handle('sso:state', (event) => { authorizedWindow(event); return sso!.snapshot() })
     ipcMain.handle('sso:login', (event) => { authorizedWindow(event); return sso!.login() })
