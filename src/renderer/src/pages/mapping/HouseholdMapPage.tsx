@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import 'leaflet.markercluster'
-import 'leaflet.markercluster/dist/MarkerCluster.css'
-import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 import type { BoundaryCollection, Household } from '../../../../shared/api'
 
 /** A blue house, drawn inline so the marker needs no image file and no CDN. */
@@ -47,8 +44,7 @@ export function HouseholdMapPage() {
       attribution: 'Tiles &copy; Esri',
     })
 
-    // Thousands of houses would swamp the map, so they go in a cluster layer that opens on zoom.
-    const cluster = L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 55 })
+    const cluster = L.featureGroup()
     for (const home of households) {
       const village = Number(home.village) || home.village
       const address = `${home.house || '-'} หมู่ที่ ${village || '-'}`

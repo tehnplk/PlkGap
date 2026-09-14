@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent, PointerEvent } from 'react'
+import type { ComponentType, KeyboardEvent, PointerEvent } from 'react'
 import type { DatabaseStatus } from '../../shared/api'
 import { CheckProgress } from './CheckProgress'
 import { LoginRequiredDialog } from './LoginRequiredDialog'
@@ -79,6 +79,21 @@ const sources: Record<Kind, string> = {
   subhdc: 'SubHdcPage',
   'plk-dashboard': 'PlkDashboardPage',
   developers: 'DevelopersPage',
+}
+const pages: Record<Kind, ComponentType> = {
+  import: Import52FilesPage,
+  'data-count': DataCountPage,
+  'structure-check': StructureCheckPage,
+  'observation-check': ObservationCheckPage,
+  'kpi-template': IndicatorTemplatePage,
+  'revenue-template': RevenueTemplatePage,
+  'household-map': HouseholdMapPage,
+  'line-morprom': LineMorPromPage,
+  dengue: DenguePage,
+  'service-unit': ServiceUnitPage,
+  subhdc: SubHdcPage,
+  'plk-dashboard': PlkDashboardPage,
+  developers: DevelopersPage,
 }
 const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
 const groups: Group[] = [
@@ -229,25 +244,16 @@ export function App() {
       <Sidebar activeId={active?.id} groups={groups.map((group) => ({ id: group.id, label: group.label, icon: group.icon, collapsed: group.collapsed, items: group.items.map((id) => ({ id, label: titles[id], icon: icons[id], onClick: () => open(id) })) }))} />
     <div className="child-area">
     <div className="workspace" ref={workspace} aria-label="MDI workspace">
-      {windows.map((item, index) => !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
-        <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
-        <div className={flushPages.includes(item.id) ? 'window-content flush' : 'window-content'}>
-          {item.id === 'import' && <Import52FilesPage />}
-          {item.id === 'data-count' && <DataCountPage />}
-          {item.id === 'structure-check' && <StructureCheckPage />}
-          {item.id === 'observation-check' && <ObservationCheckPage />}
-          {item.id === 'kpi-template' && <IndicatorTemplatePage />}
-          {item.id === 'revenue-template' && <RevenueTemplatePage />}
-          {item.id === 'household-map' && <HouseholdMapPage />}
-          {item.id === 'line-morprom' && <LineMorPromPage />}
-          {item.id === 'dengue' && <DenguePage />}
-          {item.id === 'service-unit' && <ServiceUnitPage />}
-          {item.id === 'subhdc' && <SubHdcPage />}
-          {item.id === 'plk-dashboard' && <PlkDashboardPage />}
-          {item.id === 'developers' && <DevelopersPage />}
-        </div>
-        {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}
-      </section>)}
+      {windows.map((item, index) => {
+        const Page = pages[item.id]
+        return !item.minimized && <section key={item.id} role="region" aria-label={`${windowTitle(item.id)} window`} className={`child-window ${active?.id === item.id ? 'active' : ''} ${item.maximized ? 'maximized' : ''}`} style={{ left: item.maximized ? 0 : item.x, top: item.maximized ? 0 : item.y, width: item.maximized ? '100%' : item.width, height: item.maximized ? '100%' : item.height, zIndex: index + 1 }} onPointerDown={() => focus(item.id)} onFocusCapture={() => { if (active?.id !== item.id) focus(item.id) }}>
+          <div className="window-titlebar" onPointerDown={(event) => move(event, item)} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button')) patch(item.id, { maximized: !item.maximized }) }}><span><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}</span><div className="window-controls"><button aria-label={`Minimize ${windowTitle(item.id)}`} onClick={() => patch(item.id, { minimized: true })}><Icon name="minimize" size={14} /></button><button aria-label={`${item.maximized ? 'Restore' : 'Maximize'} ${windowTitle(item.id)}`} onClick={() => patch(item.id, { maximized: !item.maximized })}><Icon name={item.maximized ? 'restore' : 'maximize'} size={13} /></button><button className="close-control" aria-label={`Close ${windowTitle(item.id)}`} onClick={() => close(item.id)}><Icon name="close" size={16} /></button></div></div>
+          <div className={flushPages.includes(item.id) ? 'window-content flush' : 'window-content'}>
+            <Page />
+          </div>
+          {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}
+        </section>
+      })}
     {windows.some((item) => item.minimized) && <div className="window-dock" aria-label="Open windows">{windows.filter((item) => item.minimized).map((item) => <button key={item.id} className={active?.id === item.id ? 'active' : ''} onClick={() => focus(item.id)} aria-pressed={active?.id === item.id} title={item.minimized ? `Restore ${windowTitle(item.id)}` : windowTitle(item.id)}><Icon name={icons[item.id]} size={15} />{windowTitle(item.id)}{item.minimized && <Icon name="minimize" size={12} />}</button>)}</div>}
     </div>
     {statusbar && <footer className="status-bar"><span role="status"><span className={`dot ${error ? 'error-dot' : !status ? 'pending-dot' : ''}`} />{connected}</span><span className="status-divider" /><span>{status ? `${status.referenceTables} ตารางอ้างอิง · ${status.referenceRows.toLocaleString('en-US')} รายการ · ${status.fileTables} แฟ้มพร้อมนำเข้า` : 'Local database'}</span><span className="status-end">{active ? windowTitle(active.id) : 'Ready'}<span className="status-divider" />PlkGap<CheckProgress /></span></footer>}

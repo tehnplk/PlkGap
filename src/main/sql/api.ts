@@ -33,12 +33,16 @@ export async function listTables(db: PGlite, withCounts = false): Promise<TableS
   const counted = await db.transaction(async (tx) => {
     await tx.query('SET TRANSACTION READ ONLY')
     await tx.query(`SET LOCAL statement_timeout = '15s'`)
-    const union = rows.map((row, index) =>
-      `SELECT $${index + 1}::text AS t, COUNT(*)::int AS n FROM ${quote(row.table)}`).join(' UNION ALL ')
-    return (await tx.query<{ t: string; n: number }>(union, rows.map((row) => row.table))).rows
+    const found = new Map<string, number>()
+    for (const row of rows) {
+      const { rows: countedRows } = await tx.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM ${quote(row.table)}`
+      )
+      found.set(row.table, countedRows[0]?.n ?? 0)
+    }
+    return found
   })
-  const found = new Map(counted.map((row) => [row.t, row.n]))
-  return rows.map((row) => ({ ...row, rowCount: found.get(row.table) ?? 0 }))
+  return rows.map((row) => ({ ...row, rowCount: counted.get(row.table) ?? 0 }))
 }
 
 /** One column of the answer to `GET /desc/{table}`. */
