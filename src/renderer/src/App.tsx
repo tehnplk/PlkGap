@@ -15,10 +15,12 @@ import { RevenueTemplatePage } from './pages/analytics/RevenueTemplatePage'
 import { HouseholdMapPage } from './pages/mapping/HouseholdMapPage'
 import { LineMorPromPage } from './pages/messaging/LineMorPromPage'
 import { DenguePage } from './pages/epidemiology/DenguePage'
+import { D506Page } from './pages/epidemiology/D506Page'
 import { ServiceUnitPage } from './pages/settings/ServiceUnitPage'
 import { SubHdcPage } from './pages/settings/SubHdcPage'
 import { PlkDashboardPage } from './pages/settings/PlkDashboardPage'
 import { DevelopersPage } from './pages/about/DevelopersPage'
+import { RduPage } from './pages/pharmacy/RduPage'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
@@ -28,8 +30,10 @@ type Kind =
   | 'household-map'
   | 'line-morprom'
   | 'dengue'
+  | 'd506'
   | 'service-unit' | 'subhdc' | 'plk-dashboard'
   | 'developers'
+  | 'rdu'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
 type Item = { label: string; action: () => void; disabled?: boolean; hint?: string }
 type Group = { id: string; label: string; icon: IconName; collapsed?: boolean; items: Kind[] }
@@ -44,10 +48,12 @@ const titles: Record<Kind, string> = {
   'household-map': 'ตำแหน่งครัวเรือน (แฟ้ม Home)',
   'line-morprom': 'ส่ง Line หมอพร้อม',
   dengue: 'ไข้เลือดออก',
+  d506: '10 อันดับโรคระบาด 506',
   'service-unit': 'ตั้งค่าหน่วยบริการ',
   subhdc: 'ตั้งค่าเชื่อมต่อระบบอำเภอ (SUB-HDC)',
   'plk-dashboard': 'ตั้งค่าเชื่อมต่อระบบจังหวัด (PLK Dashboard)',
   developers: 'ผู้พัฒนา',
+  rdu: 'RDU',
 }
 const icons: Record<Kind, IconName> = {
   import: 'upload',
@@ -59,10 +65,12 @@ const icons: Record<Kind, IconName> = {
   'household-map': 'home',
   'line-morprom': 'send',
   dengue: 'virus',
+  d506: 'activity',
   'service-unit': 'hospital',
   subhdc: 'link',
   'plk-dashboard': 'dashboard',
   developers: 'users',
+  rdu: 'pill',
 }
 // Basename of the page component that renders each Kind — shown after the title in window chrome.
 const sources: Record<Kind, string> = {
@@ -75,18 +83,21 @@ const sources: Record<Kind, string> = {
   'household-map': 'HouseholdMapPage',
   'line-morprom': 'LineMorPromPage',
   dengue: 'DenguePage',
+  d506: 'D506Page',
   'service-unit': 'ServiceUnitPage',
   subhdc: 'SubHdcPage',
   'plk-dashboard': 'PlkDashboardPage',
   developers: 'DevelopersPage',
+  rdu: 'RduPage',
 }
 const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
 const groups: Group[] = [
   { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'observation-check', 'data-count'] },
   { id: 'analytics', label: 'ระบบวิเคราะห์ข้อมูล', icon: 'chart', items: ['kpi-template', 'revenue-template'] },
+  { id: 'pharmacy', label: 'ระบบเภสัชกรรม', icon: 'pill', items: ['rdu'] },
   { id: 'mapping', label: 'ระบบแผนที่', icon: 'map', items: ['household-map'] },
   { id: 'messaging', label: 'ระบบสื่อสาร', icon: 'message', items: ['line-morprom'] },
-  { id: 'epidemiology', label: 'งานระบาดวิทยาควบคุมโรค', icon: 'activity', items: ['dengue'] },
+  { id: 'epidemiology', label: 'งานระบาดวิทยาควบคุมโรค', icon: 'activity', items: ['d506'] },
   { id: 'settings', label: 'ตั้งค่า', icon: 'settings', collapsed: true, items: ['service-unit', 'subhdc', 'plk-dashboard'] },
 ]
 const flushPages: Kind[] = ['household-map']
@@ -241,10 +252,12 @@ export function App() {
           {item.id === 'household-map' && <HouseholdMapPage />}
           {item.id === 'line-morprom' && <LineMorPromPage />}
           {item.id === 'dengue' && <DenguePage />}
+          {item.id === 'd506' && <D506Page />}
           {item.id === 'service-unit' && <ServiceUnitPage />}
           {item.id === 'subhdc' && <SubHdcPage />}
           {item.id === 'plk-dashboard' && <PlkDashboardPage />}
           {item.id === 'developers' && <DevelopersPage />}
+          {item.id === 'rdu' && <RduPage />}
         </div>
         {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}
       </section>)}
