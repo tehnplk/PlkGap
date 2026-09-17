@@ -20,6 +20,7 @@ import { ServiceUnitPage } from './pages/settings/ServiceUnitPage'
 import { SubHdcPage } from './pages/settings/SubHdcPage'
 import { PlkDashboardPage } from './pages/settings/PlkDashboardPage'
 import { DevelopersPage } from './pages/about/DevelopersPage'
+import { RduPage } from './pages/pharmacy/RduPage'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 
@@ -32,6 +33,7 @@ type Kind =
   | 'd506'
   | 'service-unit' | 'subhdc' | 'plk-dashboard'
   | 'developers'
+  | 'rdu'
 type Child = { id: Kind; x: number; y: number; width: number; height: number; minimized: boolean; maximized: boolean }
 type Item = { label: string; action: () => void; disabled?: boolean; hint?: string }
 type Group = { id: string; label: string; icon: IconName; collapsed?: boolean; items: Kind[] }
@@ -51,6 +53,7 @@ const titles: Record<Kind, string> = {
   subhdc: 'ตั้งค่าเชื่อมต่อระบบอำเภอ (SUB-HDC)',
   'plk-dashboard': 'ตั้งค่าเชื่อมต่อระบบจังหวัด (PLK Dashboard)',
   developers: 'ผู้พัฒนา',
+  rdu: 'RDU',
 }
 const icons: Record<Kind, IconName> = {
   import: 'upload',
@@ -67,6 +70,7 @@ const icons: Record<Kind, IconName> = {
   subhdc: 'link',
   'plk-dashboard': 'dashboard',
   developers: 'users',
+  rdu: 'pill',
 }
 // Basename of the page component that renders each Kind — shown after the title in window chrome.
 const sources: Record<Kind, string> = {
@@ -84,11 +88,13 @@ const sources: Record<Kind, string> = {
   subhdc: 'SubHdcPage',
   'plk-dashboard': 'PlkDashboardPage',
   developers: 'DevelopersPage',
+  rdu: 'RduPage',
 }
 const windowTitle = (id: Kind) => `${titles[id]} - ${sources[id]}`
 const groups: Group[] = [
   { id: 'files43', label: 'ระบบ 43 แฟ้ม', icon: 'folder', items: ['import', 'structure-check', 'observation-check', 'data-count'] },
   { id: 'analytics', label: 'ระบบวิเคราะห์ข้อมูล', icon: 'chart', items: ['kpi-template', 'revenue-template'] },
+  { id: 'pharmacy', label: 'ระบบเภสัชกรรม', icon: 'pill', items: ['rdu'] },
   { id: 'mapping', label: 'ระบบแผนที่', icon: 'map', items: ['household-map'] },
   { id: 'messaging', label: 'ระบบสื่อสาร', icon: 'message', items: ['line-morprom'] },
   { id: 'epidemiology', label: 'งานระบาดวิทยาควบคุมโรค', icon: 'activity', items: ['d506'] },
@@ -251,6 +257,7 @@ export function App() {
           {item.id === 'subhdc' && <SubHdcPage />}
           {item.id === 'plk-dashboard' && <PlkDashboardPage />}
           {item.id === 'developers' && <DevelopersPage />}
+          {item.id === 'rdu' && <RduPage />}
         </div>
         {!item.maximized && <div className="resize-handle" onPointerDown={(event) => move(event, item, true)} aria-hidden="true" />}
       </section>)}

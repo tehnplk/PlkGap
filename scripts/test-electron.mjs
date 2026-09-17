@@ -171,7 +171,7 @@ try {
   assert.equal(workspaceBounds.y + workspaceBounds.height, statusBounds.y, 'Workspace fills available height')
 
   // Sidebar menu groups: every group header is present and children live inside their own group
-  const groupNames = ['ระบบ 43 แฟ้ม', 'ระบบวิเคราะห์ข้อมูล', 'ระบบแผนที่', 'ระบบสื่อสาร', 'งานระบาดวิทยาควบคุมโรค', 'ตั้งค่า']
+  const groupNames = ['ระบบ 43 แฟ้ม', 'ระบบวิเคราะห์ข้อมูล', 'ระบบเภสัชกรรม', 'ระบบแผนที่', 'ระบบสื่อสาร', 'งานระบาดวิทยาควบคุมโรค', 'ตั้งค่า']
   for (const name of groupNames) await expect(navigation.getByRole('button', { name, exact: true })).toBeVisible()
   const files43 = navigation.getByRole('button', { name: 'ระบบ 43 แฟ้ม', exact: true })
   await expect(files43).toHaveAttribute('aria-expanded', 'true')

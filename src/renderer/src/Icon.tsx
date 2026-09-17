@@ -6,8 +6,9 @@ export type IconName =
   | 'message' | 'send'
   | 'virus' | 'activity'
   | 'settings' | 'hospital' | 'link' | 'dashboard' | 'counter'
-  | 'users' | 'list'
+  | 'users' | 'list' | 'pill'
 const paths: Record<IconName, string> = {
+  pill: 'm10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z M8.5 8.5l7 7',
   grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   cascade: 'M4 15H2V2h13v2 M8 19H6V6h13v2 M10 10h12v12H10z M10 14h12',
   tile: 'M3 4h18v16H3z M12 4v16 M3 8h18',
