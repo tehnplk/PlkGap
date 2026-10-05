@@ -86,8 +86,12 @@ svg { flex-shrink: 0; }
 .stat-card strong { display: block; font-size: 19px; font-weight: 600; margin-top: 5px; letter-spacing: -.5px; color: var(--theme-text, #39244f); }
 .import-progress { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; padding: 12px 14px; background: var(--theme-surface, #fff); }
 .import-progress .progress { margin-top: 0; }
-.browse-button { font-family: Consolas, monospace; letter-spacing: 1px; padding: 7px 12px; }
+.browse-button { padding: 7px 12px; }
 .data-table .mock-button { padding: 4px 10px; font-size: 11px; }
+.field-description { max-width: 540px; line-height: 1.5; vertical-align: top; }
+.description-lines { display: flex; flex-direction: column; gap: 3px; }
+.description-item { white-space: normal; }
+.description-note { color: var(--theme-secondary, #746582); font-size: 11px; margin-top: 2px; }
 .large-modal { width: min(1100px, 92vw); max-width: 92vw; height: min(720px, 86vh); padding: 0; border: 1px solid var(--theme-border, #c7b5dc); border-radius: 8px; background: var(--theme-surface, #fff); color: inherit; overflow: hidden; }
 .large-modal[open] { display: flex; flex-direction: column; }
 .large-modal::backdrop { background: #30263f66; }

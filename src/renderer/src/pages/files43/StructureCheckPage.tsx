@@ -7,6 +7,42 @@ import { Icon } from '../../Icon'
 const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 const megabytes = (bytes: number) => (bytes / 1048576).toFixed(2)
 
+function splitDescriptionLines(text: string): string[] {
+  if (!text) return []
+  if (text.includes('\n')) {
+    return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  }
+  const lines = text
+    .split(/(?:,\s*|\s+)(?=(?:\d{1,2}\s*=|หมายเหตุ\s*:))/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return lines.length > 0 ? lines : [text]
+}
+
+function shouldFormatMultiline(desc: string, columnName: string): boolean {
+  if (columnName.toLowerCase() === 'typearea') return true
+  if (!desc) return false
+  if (desc.includes('\n')) return true
+  const lines = splitDescriptionLines(desc)
+  if (lines.length <= 1) return false
+  // ข้อความยาว (เกิน 100 ตัวอักษร หรือมีข้อใดข้อหนึ่งยาวเกิน 40 ตัวอักษร) ให้แยกขึ้นบรรทัดใหม่
+  return desc.length > 100 || lines.some((l) => l.length > 40)
+}
+
+function renderDescription(desc: string, columnName: string) {
+  if (!desc) return '-'
+  if (!shouldFormatMultiline(desc, columnName)) return desc
+  const lines = splitDescriptionLines(desc)
+  if (lines.length <= 1) return desc
+  return <div className="description-lines">
+    {lines.map((line, idx) => (
+      <div key={idx} className={line.startsWith('หมายเหตุ') ? 'description-note' : 'description-item'}>
+        {line}
+      </div>
+    ))}
+  </div>
+}
+
 /** One row of the result grid: every rule that failed on the same field, counted together. */
 interface FieldSummary {
   tableName: string
@@ -213,7 +249,7 @@ export function StructureCheckPage() {
                 ? <button type="button" className="link-button" title={`ดูรหัสที่ใช้ได้จาก ${field.reference}`}
                     onClick={() => void showCodes(field)}><strong>{field.columnName.toUpperCase()}</strong></button>
                 : <strong>{field.columnName.toUpperCase()}</strong>}</td>
-              <td className="field-description">{field.fieldDescription || '-'}</td>
+              <td className="field-description" data-sort-value={field.fieldDescription || ''}>{renderDescription(field.fieldDescription, field.columnName)}</td>
               <td className="col-right num-cell">{field.tableRows.toLocaleString('en-US')}</td>
               <td className="col-right num-cell">{(field.tableRows - field.failed).toLocaleString('en-US')}</td>
               <td className="col-right num-cell">{field.tableRows ? (((field.tableRows - field.failed) / field.tableRows) * 100).toFixed(2) : '-'}</td>

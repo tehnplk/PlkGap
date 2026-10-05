@@ -80,11 +80,12 @@ export function Import52FilesPage() {
     </div>
 
     <div className="field-row">
-      <label htmlFor="import-path">เลือกไฟล์</label>
       <input id="import-path" className="mock-input" style={{ flex: 1, minWidth: 240 }} value={path}
-        placeholder="เลือกไฟล์ .zip" onChange={(event) => setPath(event.target.value)}
+        aria-label="เลือกไฟล์" placeholder="เลือกไฟล์ .zip" onChange={(event) => setPath(event.target.value)}
         onBlur={(event) => { if (event.target.value.trim()) void inspect(event.target.value.trim()) }} />
-      <button type="button" className="mock-button browse-button" onClick={browse} aria-label="เรียกดูไฟล์">...</button>
+      <button type="button" className="mock-button browse-button" onClick={browse} aria-label="เรียกดูไฟล์" title="เลือกไฟล์ .zip จากคอมพิวเตอร์">
+        <Icon name="folder" size={15} />เลือกไฟล์
+      </button>
       <button type="button" className="mock-button primary" disabled={!check?.valid || busy} onClick={start}>
         <Icon name="upload" size={15} />นำเข้า
       </button>
