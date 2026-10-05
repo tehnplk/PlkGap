@@ -245,7 +245,27 @@ export interface D506Report {
   items: D506Item[]
 }
 
+export interface RevenueItem {
+  fund: string
+  claimed: number | null
+  approved: number | null
+  rejected: number | null
+  state: 'passed' | 'pending' | 'warning' | null
+}
+
+export interface RevenueReport {
+  month: string
+  availableMonths: string[]
+  hasRealData: boolean
+  totalClaimed: number | null
+  totalApproved: number | null
+  totalRejected: number | null
+  passRate: number | null
+  items: RevenueItem[]
+}
+
 export interface AppApi {
+  getRevenueReport: (month: string) => Promise<RevenueReport>
   getD506Report: (year: number) => Promise<D506Report>
   listMessageVillages: () => Promise<{ id: string; label: string }[]>
   processIndicators: (period: string) => Promise<IndicatorReport>

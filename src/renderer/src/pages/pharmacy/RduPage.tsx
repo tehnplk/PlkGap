@@ -9,9 +9,9 @@ export interface RduIndicator {
   categoryName: string
   target: number
   operator: '<=' | '>='
-  numerator: number
-  denominator: number
-  value: number
+  numerator: number | null
+  denominator: number | null
+  value: number | null
   files: string
   description: string
   formulaA: string
@@ -27,9 +27,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'ยาปฏิชีวนะ',
     target: 20,
     operator: '<=',
-    numerator: 142,
-    denominator: 890,
-    value: 15.96,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, diagnosis_opd',
     description: 'ร้อยละของผู้ป่วยนอกที่ได้รับการวินิจฉัยโรคติดเชื้อทางเดินหายใจส่วนบน (J00-J06, J20-J21) ที่ได้รับยาปฏิชีวนะ',
     formulaA: 'จำนวนผู้ป่วยนอก URI ที่ได้รับยาปฏิชีวนะอย่างน้อย 1 รายการ',
@@ -43,9 +43,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'ยาปฏิชีวนะ',
     target: 20,
     operator: '<=',
-    numerator: 78,
-    denominator: 430,
-    value: 18.14,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, diagnosis_opd',
     description: 'ร้อยละของผู้ป่วยนอกที่ได้รับการวินิจฉัยโรคอุจจาระร่วงเฉียบพลัน (A09) ที่ได้รับยาปฏิชีวนะ',
     formulaA: 'จำนวนผู้ป่วยนอกอุจจาระร่วงเฉียบพลันที่ได้รับยาปฏิชีวนะ',
@@ -59,9 +59,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'ยาปฏิชีวนะ',
     target: 40,
     operator: '<=',
-    numerator: 156,
-    denominator: 340,
-    value: 45.88,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, diagnosis_opd, procedure_opd',
     description: 'ร้อยละของผู้ป่วยนอกที่มารับการทำแผลสดจากอุบัติเหตุสะอาด ไม่เกิน 6 ชั่วโมง ที่ได้รับยาปฏิชีวนะ',
     formulaA: 'จำนวนผู้ป่วยแผลสดสะอาดที่ได้รับยาปฏิชีวนะ',
@@ -75,9 +75,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'ยาปฏิชีวนะ',
     target: 10,
     operator: '<=',
-    numerator: 6,
-    denominator: 85,
-    value: 7.06,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_ipd, diagnosis_ipd, admission',
     description: 'ร้อยละของหญิงตั้งครรภ์คลอดปกติทางช่องคลอดที่ไม่มีภาวะแทรกซ้อนที่ได้รับยาปฏิชีวนะ',
     formulaA: 'จำนวนหญิงคลอดปกติที่ได้รับยาปฏิชีวนะ',
@@ -91,9 +91,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'โรคเรื้อรัง NCD',
     target: 0,
     operator: '<=',
-    numerator: 8,
-    denominator: 620,
-    value: 1.29,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, chronic, diagnosis_opd',
     description: 'ร้อยละของผู้ป่วย CKD Stage 3 ขึ้นไปที่ได้รับยากลุ่ม NSAIDs ซึ่งมีพิษต่อไต',
     formulaA: 'จำนวนผู้ป่วย CKD Stage 3-5 ที่ได้รับยา NSAIDs ในช่วงงวดประเมิน',
@@ -107,9 +107,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'โรคเรื้อรัง NCD',
     target: 0,
     operator: '<=',
-    numerator: 2,
-    denominator: 1450,
-    value: 0.14,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, chronic, diagnosis_opd',
     description: 'ร้อยละของผู้ป่วย DM/HT ที่ได้รับยา ACEI และ ARB ร่วมกันในครั้งเดียวกัน ซึ่งเพิ่มความเสี่ยงต่อภาวะโพแทสเซียมในเลือดสูงและไตวายเฉียบพลัน',
     formulaA: 'จำนวนผู้ป่วย DM/HT ที่ได้รับยา ACEI ร่วมกับ ARB ซ้ำซ้อน',
@@ -123,9 +123,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'กลุ่มเสี่ยง/ผู้สูงอายุ',
     target: 5,
     operator: '<=',
-    numerator: 46,
-    denominator: 980,
-    value: 4.69,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, person, service',
     description: 'ร้อยละของผู้สูงอายุที่ได้รับยา Diazepam, Clonazepam หรือ Chlordiazepoxide ซึ่งเพิ่มความเสี่ยงต่อการพลัดตกหกล้มและการรู้คิดบกพร่อง',
     formulaA: 'จำนวนผู้สูงอายุที่ได้รับยา Long-acting Benzodiazepines',
@@ -139,9 +139,9 @@ const RDU_INDICATORS: RduIndicator[] = [
     categoryName: 'ยาปฏิชีวนะ',
     target: 15,
     operator: '<=',
-    numerator: 88,
-    denominator: 720,
-    value: 12.22,
+    numerator: null,
+    denominator: null,
+    value: null,
     files: 'drug_opd, diagnosis_opd',
     description: 'ร้อยละของผู้ป่วยนอกที่ได้รับยาปฏิชีวนะกลุ่ม Watch Group (เช่น Fluoroquinolones, 3rd gen Cephalosporins, Macrolides)',
     formulaA: 'จำนวนผู้ป่วยนอกที่ได้รับยาปฏิชีวนะกลุ่ม Watch Group',
@@ -156,19 +156,23 @@ export function RduPage() {
   const [onlyFailed, setOnlyFailed] = useState(false)
   const [selected, setSelected] = useState<RduIndicator | null>(null)
 
+  const hasData = (item: RduIndicator) =>
+    item.value !== null && item.numerator !== null && item.denominator !== null
+
   const isPassed = (item: RduIndicator) =>
-    item.operator === '<=' ? item.value <= item.target : item.value >= item.target
+    hasData(item) && (item.operator === '<=' ? item.value! <= item.target : item.value! >= item.target)
 
   const filtered = RDU_INDICATORS.filter((item) => {
     if (category !== 'all' && item.category !== category) return false
-    if (onlyFailed && isPassed(item)) return false
+    if (onlyFailed && (!hasData(item) || isPassed(item))) return false
     return true
   })
 
   const totalCount = RDU_INDICATORS.length
+  const evaluatedCount = RDU_INDICATORS.filter(hasData).length
   const passedCount = RDU_INDICATORS.filter(isPassed).length
-  const failedCount = totalCount - passedCount
-  const passRate = Math.round((passedCount / totalCount) * 100)
+  const failedCount = evaluatedCount - passedCount
+  const passRate = evaluatedCount > 0 ? Math.round((passedCount / evaluatedCount) * 100) : null
 
   return (
     <>
@@ -177,9 +181,13 @@ export function RduPage() {
           <p className="eyebrow">ระบบเภสัชกรรม</p>
           <h2>RDU (การใช้ยาอย่างสมเหตุผล)</h2>
         </div>
-        <span className={`badge ${failedCount > 0 ? '' : 'status-passed'}`}>
-          ผ่านเกณฑ์ {passedCount}/{totalCount} ตัวชี้วัด ({passRate}%)
-        </span>
+        {evaluatedCount > 0 ? (
+          <span className={`badge ${failedCount > 0 ? '' : 'status-passed'}`}>
+            ผ่านเกณฑ์ {passedCount}/{evaluatedCount} ตัวชี้วัด ({passRate}%)
+          </span>
+        ) : (
+          <span className="badge">ไม่มีข้อมูล</span>
+        )}
       </div>
       <p>
         ติดตามและประเมินผลการดำเนินงานตามเกณฑ์การใช้ยาอย่างสมเหตุผล (Rational Drug Use) ประจำปีงบประมาณ
@@ -193,17 +201,21 @@ export function RduPage() {
         </div>
         <div className="stat-card">
           <small>ผ่านเกณฑ์เป้าหมาย</small>
-          <strong style={{ color: 'var(--theme-accent-color, #278344)' }}>{passedCount} รายการ</strong>
+          <strong style={{ color: 'var(--theme-accent-color, #278344)' }}>
+            {evaluatedCount > 0 ? `${passedCount} รายการ` : ''}
+          </strong>
         </div>
         <div className="stat-card">
           <small>ไม่ผ่าน / ต้องปรับปรุง</small>
-          <strong style={{ color: failedCount > 0 ? '#a83030' : 'inherit' }}>{failedCount} รายการ</strong>
+          <strong style={{ color: failedCount > 0 ? '#a83030' : 'inherit' }}>
+            {evaluatedCount > 0 ? `${failedCount} รายการ` : ''}
+          </strong>
         </div>
         <div className="stat-card">
           <small>อัตราผ่านเกณฑ์เฉลี่ย</small>
-          <strong>{passRate}%</strong>
+          <strong>{passRate !== null ? `${passRate}%` : ''}</strong>
           <div className="progress">
-            <span style={{ width: `${passRate}%` }} />
+            <span style={{ width: `${passRate ?? 0}%` }} />
           </div>
         </div>
       </div>
@@ -263,6 +275,7 @@ export function RduPage() {
           </thead>
           <tbody>
             {filtered.map((item) => {
+              const withData = hasData(item)
               const passed = isPassed(item)
               return (
                 <tr key={item.code}>
@@ -276,19 +289,23 @@ export function RduPage() {
                   <td className="col-right num-cell" data-sort-value={item.target}>
                     {item.operator} {item.target}%
                   </td>
-                  <td className="col-right num-cell" data-sort-value={item.numerator}>
-                    {item.numerator.toLocaleString('en-US')}
+                  <td className="col-right num-cell" data-sort-value={item.numerator ?? ''}>
+                    {item.numerator !== null ? item.numerator.toLocaleString('en-US') : ''}
                   </td>
-                  <td className="col-right num-cell" data-sort-value={item.denominator}>
-                    {item.denominator.toLocaleString('en-US')}
+                  <td className="col-right num-cell" data-sort-value={item.denominator ?? ''}>
+                    {item.denominator !== null ? item.denominator.toLocaleString('en-US') : ''}
                   </td>
-                  <td className="col-right num-cell" data-sort-value={item.value}>
-                    <strong>{item.value.toFixed(2)}%</strong>
+                  <td className="col-right num-cell" data-sort-value={item.value ?? ''}>
+                    {item.value !== null ? <strong>{item.value.toFixed(2)}%</strong> : ''}
                   </td>
                   <td className="col-center">
-                    <span className={`status-pill ${passed ? 'status-passed' : 'status-error'}`}>
-                      {passed ? 'ผ่านเกณฑ์' : 'ไม่ผ่านเกณฑ์'}
-                    </span>
+                    {withData ? (
+                      <span className={`status-pill ${passed ? 'status-passed' : 'status-error'}`}>
+                        {passed ? 'ผ่านเกณฑ์' : 'ไม่ผ่านเกณฑ์'}
+                      </span>
+                    ) : (
+                      ''
+                    )}
                   </td>
                   <td className="col-center">
                     <button
@@ -352,16 +369,22 @@ export function RduPage() {
 
               <dt>ผลงานปัจจุบัน</dt>
               <dd>
-                <strong>
-                  {selected.numerator.toLocaleString('en-US')} / {selected.denominator.toLocaleString('en-US')} (
-                  {selected.value.toFixed(2)}%)
-                </strong>
-                <span
-                  className={`status-pill ${isPassed(selected) ? 'status-passed' : 'status-error'}`}
-                  style={{ marginLeft: 8 }}
-                >
-                  {isPassed(selected) ? 'ผ่านเกณฑ์' : 'ไม่ผ่านเกณฑ์'}
-                </span>
+                {hasData(selected) ? (
+                  <>
+                    <strong>
+                      {selected.numerator!.toLocaleString('en-US')} / {selected.denominator!.toLocaleString('en-US')} (
+                      {selected.value!.toFixed(2)}%)
+                    </strong>
+                    <span
+                      className={`status-pill ${isPassed(selected) ? 'status-passed' : 'status-error'}`}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {isPassed(selected) ? 'ผ่านเกณฑ์' : 'ไม่ผ่านเกณฑ์'}
+                    </span>
+                  </>
+                ) : (
+                  <span style={{ color: 'var(--theme-text-muted, #7c7289)' }}>ไม่มีข้อมูล</span>
+                )}
               </dd>
 
               <dt>คำแนะนำทางเภสัชกรรม (RDU Advice)</dt>

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
+  getRevenueReport: (month) => ipcRenderer.invoke('revenue:report', month),
   getD506Report: (year) => ipcRenderer.invoke('d506:report', year),
   listMessageVillages: () => ipcRenderer.invoke('messaging:villages'),
   processIndicators: (period) => ipcRenderer.invoke('indicators:process', period),
