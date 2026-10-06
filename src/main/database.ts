@@ -16,6 +16,8 @@ export { syncObservationRules, listObservationRules, setObservationRuleActive, c
 export { countByFiscalYears } from './sql/data-count'
 export { listTables, describeTable, blockedApiColumns, MASK, API_ROLE, API_SCHEMA, createApiSchema, runReadOnlySql } from './sql/api'
 export { processIndicators } from './sql/indicators'
+export { getD506Report } from './sql/d506'
+export { getRevenueReport } from './sql/revenue'
 
 export async function openDatabase(path: string, onPhase?: SchemaPhase) {
   const db = new PGlite(path, { extensions: { postgis } })

@@ -188,7 +188,7 @@ export async function structureFailingRows(db: PGlite, zipName: string, tableNam
   const values = [zipName, ...tests.map((test) => test.detail)]
   const { rows: sample } = await db.query<Record<string, string>>(
     `SELECT ${shown.map(quote).join(', ')}, ${named} AS ${quote(RULE_COLUMN)}
-     FROM ${quote(tableName)} WHERE ${importedFromZip} AND (${failed}) LIMIT ${limit}`, values)
+     FROM ${quote(tableName)} WHERE ${importedFromZip} AND (${failed})${limit > 0 ? ` LIMIT ${limit}` : ''}`, values)
   const { rows: counted } = await db.query<{ n: number }>(
     `SELECT COUNT(*)::int AS n FROM ${quote(tableName)} WHERE ${importedFromZip} AND (${failed})`, [zipName])
   const columns = [...shown, RULE_COLUMN]

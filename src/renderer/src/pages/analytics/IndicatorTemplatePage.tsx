@@ -12,6 +12,8 @@ export function IndicatorTemplatePage() {
   const [error, setError] = useState('')
   const [onlyBelow, setOnlyBelow] = useState(false)
   const [selected, setSelected] = useState<IndicatorResult | null>(null)
+  const [exportingGap, setExportingGap] = useState(false)
+  const [gapError, setGapError] = useState('')
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     if (selected && !dialog.current?.open) dialog.current?.showModal()
@@ -42,6 +44,64 @@ export function IndicatorTemplatePage() {
       await window.api.saveIndicatorWorkbook(report.period, bytes)
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
   }
+
+  function downloadBlobFile(fileName: string, bytes: Uint8Array) {
+    const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    setTimeout(() => {
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }, 100)
+  }
+
+  async function exportGapExcel() {
+    if (!selected || !selected.gaps.length) return
+    setExportingGap(true)
+    setGapError('')
+    try {
+      const XLSX = await import('xlsx')
+      const book = XLSX.utils.book_new()
+      const data = selected.gaps.map(person => ({
+        'HOSPCODE': person.hospcode,
+        'PID': person.pid,
+        'CID': person.cid || '',
+        'ชื่อ-สกุล': person.fullname,
+        'รายละเอียดส่วนขาด': person.detail,
+      }))
+      const sheet = XLSX.utils.json_to_sheet(data)
+      const sheetName = `ส่วนขาด_${selected.code}`.slice(0, 31)
+      XLSX.utils.book_append_sheet(book, sheet, sheetName)
+
+      const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
+      const fileName = `ส่วนขาด_${selected.code}_${report?.period || 'KPI'}.xlsx`
+
+      if (typeof window.api?.saveExcelFile === 'function') {
+        try {
+          await window.api.saveExcelFile(fileName, bytes)
+        } catch (err: unknown) {
+          const msg = String(err)
+          if (msg.includes('No handler registered')) {
+            downloadBlobFile(fileName, bytes)
+          } else {
+            throw err
+          }
+        }
+      } else {
+        downloadBlobFile(fileName, bytes)
+      }
+    } catch (reason) {
+      const msg = reason instanceof Error ? reason.message : String(reason)
+      setGapError(msg)
+      setError(msg)
+    } finally {
+      setExportingGap(false)
+    }
+  }
   const all = report?.indicators ?? []
   const rows = all.filter(item => !onlyBelow || (item.value !== null && item.value < item.target))
   const evaluated = all.filter(item => item.value !== null)
@@ -58,7 +118,7 @@ export function IndicatorTemplatePage() {
           <option key={`${year}-Q${q}`} value={`${year}-Q${q}`}>ปีงบ {year} ไตรมาส {q}</option>))}
       </select>
       <button type="button" className="mock-button primary" disabled={busy} onClick={() => void process()}><Icon name="gauge" size={15} />{busy ? 'กำลังประมวลผล…' : 'ประมวลผลตัวชี้วัด'}</button>
-      <button type="button" className="mock-button" disabled={!report || busy} onClick={() => void exportExcel()}>ส่งออก Excel</button>
+      <button type="button" className="mock-button" disabled={!report || busy} onClick={() => void exportExcel()}><Icon name="excel" size={15} />Export Excel</button>
       <label className="mock-check" style={{ marginLeft: 'auto' }}><input type="checkbox" checked={onlyBelow} onChange={event => setOnlyBelow(event.target.checked)} />แสดงเฉพาะที่ต่ำกว่าเป้า</label>
     </div>
     {error && <p role="alert">{error}</p>}
@@ -82,13 +142,33 @@ export function IndicatorTemplatePage() {
         {all.map(item => <p key={item.code}><strong>{item.code}</strong> — {item.rule}{item.unavailable && <> · {item.unavailable}</>}</p>)}
       </details>
     </>}
-    <dialog className="large-modal" ref={dialog} onClose={() => setSelected(null)} aria-label="แสดงส่วนขาด">
-      {selected && <><header><div><strong>แสดงส่วนขาด — {selected.code} {selected.name}</strong><small>แสดง {selected.gaps.length.toLocaleString()} จาก {selected.gapCount.toLocaleString()} รายการ (สูงสุด 500) · {report?.period}</small></div>
-        <button type="button" className="modal-close" aria-label="ปิด" onClick={() => setSelected(null)}><Icon name="close" size={16} /></button></header>
+    <dialog className="large-modal" ref={dialog} onClose={() => { setSelected(null); setGapError('') }} aria-label="แสดงส่วนขาด">
+      {selected && <>
+        <header>
+          <div>
+            <strong>แสดงส่วนขาด — {selected.code} {selected.name}</strong>
+            <small>แสดง {selected.gaps.length.toLocaleString()} จาก {selected.gapCount.toLocaleString()} รายการ (สูงสุด 500) · {report?.period}</small>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button type="button" className="mock-button" disabled={exportingGap || !selected.gaps.length}
+              onClick={() => void exportGapExcel()}
+              title={`Export รายชื่อส่วนขาดของ ${selected.code} เป็น Excel`}>
+              <Icon name="excel" size={16} />
+              {exportingGap ? 'กำลัง Export...' : 'Export Excel'}
+            </button>
+            <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => { setSelected(null); setGapError('') }}>
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        </header>
+        {gapError && <div style={{ padding: '8px 18px', background: '#fce8e8', color: '#a83030', fontSize: '11px', borderBottom: '1px solid var(--line)' }} role="alert">
+          {gapError}
+        </div>}
         <div className="table-wrapper"><SortableTable key={selected.code} className="data-table" aria-label="รายชื่อส่วนขาด">
           <thead><tr><th>HOSPCODE</th><th>PID</th><th>CID</th><th>ชื่อ-สกุล</th><th>รายละเอียดส่วนขาด</th></tr></thead>
           <tbody>{selected.gaps.map((person, i) => <tr key={`${person.hospcode}-${person.pid}-${i}`}><td>{person.hospcode}</td><td>{person.pid}</td><td>{person.cid || '—'}</td><td>{person.fullname}</td><td>{person.detail}</td></tr>)}</tbody>
-        </SortableTable></div></>}
+        </SortableTable></div>
+      </>}
     </dialog>
   </>
 }

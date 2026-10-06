@@ -211,16 +211,17 @@ export async function checkObservations(db: PGlite, zipName: string,
   return { zipName, checkedAt: new Date().toISOString(), findings }
 }
 
-export async function observationRows(db: PGlite, zipName: string, ruleId: string): Promise<FailingRows> {
+export async function observationRows(db: PGlite, zipName: string, ruleId: string, limit = 100): Promise<FailingRows> {
   const rule = observationRules().find((entry) => entry.id === ruleId)
   if (!rule) throw new Error('ไม่รู้จักเกณฑ์ข้อสังเกต')
   // The heading follows the register, so a reworded rule reads the same here as in the result list.
   const { rows: registered } = await db.query<{ detail: string }>(
     'SELECT detail FROM observ_check WHERE rule_id = $1', [ruleId])
   const detail = registered[0]?.detail ?? rule.detail
+  const limitClause = limit > 0 ? `LIMIT ${limit}` : ''
   const result = await db.query<Record<string, string | number>>(`WITH candidates AS (${rule.sql})
     SELECT ${rule.columns.map(quote).join(', ')}, COUNT(*) OVER()::int AS total
-    FROM candidates WHERE eligible AND failed ORDER BY ${rule.columns.map(quote).join(', ')} LIMIT 100`, [zipName])
+    FROM candidates WHERE eligible AND failed ORDER BY ${rule.columns.map(quote).join(', ')} ${limitClause}`, [zipName])
   return { tableName: rule.tableName, columnName: '', detail, columns: rule.columns,
     rows: result.rows.map((row) => rule.columns.map((column) => String(row[column] ?? ''))),
     total: Number(result.rows[0]?.total ?? 0) }

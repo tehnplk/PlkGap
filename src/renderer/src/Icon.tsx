@@ -6,8 +6,10 @@ export type IconName =
   | 'message' | 'send'
   | 'virus' | 'activity'
   | 'settings' | 'hospital' | 'link' | 'dashboard' | 'counter'
-  | 'users' | 'list'
+  | 'users' | 'list' | 'pill' | 'excel'
 const paths: Record<IconName, string> = {
+  excel: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13l4 5 M12 13l-4 5 M15 14.5h2 M15 17.5h2',
+  pill: 'm10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z M8.5 8.5l7 7',
   grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   cascade: 'M4 15H2V2h13v2 M8 19H6V6h13v2 M10 10h12v12H10z M10 14h12',
   tile: 'M3 4h18v16H3z M12 4v16 M3 8h18',
@@ -35,5 +37,13 @@ const paths: Record<IconName, string> = {
   list: 'M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6 M9 16h6',
 }
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  if (name === 'excel') {
+    return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" fill="#e8f5e9" stroke="#107c41" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M14 2v6h6" stroke="#107c41" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="3" y="8" width="10" height="10" rx="1.5" fill="#107c41" />
+      <path d="M6 10.5l4 5 M10 10.5l-4 5" stroke="#ffffff" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>
 }

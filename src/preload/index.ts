@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppApi } from '../shared/api'
 
 const api: AppApi = {
+  getRevenueReport: (month) => ipcRenderer.invoke('revenue:report', month),
+  getD506Report: (year) => ipcRenderer.invoke('d506:report', year),
   listMessageVillages: () => ipcRenderer.invoke('messaging:villages'),
   processIndicators: (period) => ipcRenderer.invoke('indicators:process', period),
   saveIndicatorWorkbook: (period, bytes) => ipcRenderer.invoke('indicators:save-workbook', period, bytes),
@@ -32,12 +34,13 @@ const api: AppApi = {
   countByFiscalYears: (table, years) => ipcRenderer.invoke('files:count-by-year', table, years),
   checkStructure: (zipName) => ipcRenderer.invoke('structure:check', zipName),
   checkObservations: (zipName) => ipcRenderer.invoke('observations:check', zipName),
-  observationRows: (zipName, rule) => ipcRenderer.invoke('observations:rows', zipName, rule),
+  observationRows: (zipName, rule, limit) => ipcRenderer.invoke('observations:rows', zipName, rule, limit),
   listObservationRules: () => ipcRenderer.invoke('observations:rules'),
   setObservationRuleActive: (rule, active) => ipcRenderer.invoke('observations:set-active', rule, active),
   structureResult: (zipName) => ipcRenderer.invoke('structure:result', zipName),
-  failingRows: (zipName, tableName, columnName, rule) =>
-    ipcRenderer.invoke('structure:failing-rows', zipName, tableName, columnName, rule),
+  saveExcelFile: (defaultFilename, bytes) => ipcRenderer.invoke('files:save-excel', defaultFilename, bytes),
+  failingRows: (zipName, tableName, columnName, rule, limit) =>
+    ipcRenderer.invoke('structure:failing-rows', zipName, tableName, columnName, rule, limit),
   referenceCodes: (table) => ipcRenderer.invoke('reference:codes', table),
   listImportLog: () => ipcRenderer.invoke('import:log'),
   checkImportFile: (path) => ipcRenderer.invoke('import:check-file', path),

@@ -219,7 +219,54 @@ export interface IndicatorReport {
   period: string; start: string; end: string; processedAt: string; indicators: IndicatorResult[]
 }
 
+export interface D506Item {
+  rank: number
+  code506: string
+  icd10: string
+  name: string
+  cases: number
+  deaths: number
+  attackRate: number
+  caseFatalityRate: number
+  trend: 'up' | 'stable' | 'down'
+}
+
+export interface D506Report {
+  year: number
+  population: number
+  totalCases: number
+  totalDeaths: number
+  overallAttackRate: number
+  overallCfr: number
+  topDisease: string
+  availableYears: number[]
+  hasRealData: boolean
+  totalSurveillanceRows: number
+  items: D506Item[]
+}
+
+export interface RevenueItem {
+  fund: string
+  claimed: number | null
+  approved: number | null
+  rejected: number | null
+  state: 'passed' | 'pending' | 'warning' | null
+}
+
+export interface RevenueReport {
+  month: string
+  availableMonths: string[]
+  hasRealData: boolean
+  totalClaimed: number | null
+  totalApproved: number | null
+  totalRejected: number | null
+  passRate: number | null
+  items: RevenueItem[]
+}
+
 export interface AppApi {
+  getRevenueReport: (month: string) => Promise<RevenueReport>
+  getD506Report: (year: number) => Promise<D506Report>
   listMessageVillages: () => Promise<{ id: string; label: string }[]>
   processIndicators: (period: string) => Promise<IndicatorReport>
   saveIndicatorWorkbook: (period: string, bytes: Uint8Array | number[]) => Promise<boolean>
@@ -248,16 +295,18 @@ export interface AppApi {
   /** Checks the rows imported from one zip against the 43-file data dictionary, and stores it. */
   checkStructure: (zipName: string) => Promise<StructureCheckResult>
   checkObservations: (zipName: string) => Promise<ObservationResult>
-  observationRows: (zipName: string, rule: ObservationRuleId) => Promise<FailingRows>
+  observationRows: (zipName: string, rule: ObservationRuleId, limit?: number) => Promise<FailingRows>
   /** The `observ_check` register — every rule the app knows, in the order it runs them. */
   listObservationRules: () => Promise<ObservationRule[]>
   /** Switches one registered rule on or off for the next check. */
   setObservationRuleActive: (rule: ObservationRuleId, active: boolean) => Promise<void>
   /** The stored result of the last structure check of a zip, if there is one. */
   structureResult: (zipName: string) => Promise<StructureCheckResult | null>
+  /** Saves an Excel workbook to a chosen location on disk. Returns true if saved, false if cancelled. */
+  saveExcelFile: (defaultFilename: string, bytes: Uint8Array | number[]) => Promise<boolean>
   /** The actual rows behind a field's findings, capped to a readable sample. Omit `rule` for every
-   * rule of that field; each record still names the one it broke. */
-  failingRows: (zipName: string, tableName: string, columnName: string, rule?: string) => Promise<FailingRows>
+   * rule of that field; each record still names the one it broke. Pass limit 0 for all rows. */
+  failingRows: (zipName: string, tableName: string, columnName: string, rule?: string, limit?: number) => Promise<FailingRows>
   /** Every row of one `c_*` code list, named by a finding's `reference`. */
   referenceCodes: (table: string) => Promise<ReferenceCodeList>
   /** Past import runs, newest first. The history is append-only — it cannot be cleared. */

@@ -11,7 +11,7 @@ import { basename, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { apiPort, startApiServer } from './server'
 import { createGateway } from './gateway'
-import { databaseStatus, finishImportRun, findHospital, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, referenceCodeList, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
+import { databaseStatus, finishImportRun, findHospital, getD506Report, getRevenueReport, insertStandardRows, listImportLog, checkImportStructure, countByFiscalYears, listBoundaries, listHouseholds, listObservationRules, listStandardFiles, referenceCodeList, setObservationRuleActive, structureFailingRows, structureResult, openDatabase, startImportRun, updateImportProgress } from './database'
 import { checkImportZip, eachZipTextEntry, parsePipeFile } from './Import52Files'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { CheckProgress } from '../shared/api'
@@ -30,6 +30,7 @@ const testData = process.env.PLKGAP_TEST_DATA_DIR
 if (testData) app.setPath('userData', testData)
 
 function createWindow(beforeShow?: () => Promise<void> | void) {
+  const iconPath = join(__dirname, '../../build/icon.png')
   window = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -38,6 +39,7 @@ function createWindow(beforeShow?: () => Promise<void> | void) {
     frame: false,
     show: false,
     backgroundColor: '#f4f6fa',
+    icon: iconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -241,6 +243,24 @@ if (!app.requestSingleInstanceLock()) {
       await writeFile(result.filePath, data)
       return true
     })
+    ipcMain.handle('files:save-excel', async (event, defaultName: unknown, bytes: unknown) => {
+      const target = authorizedWindow(event)
+      const data = bytes instanceof Uint8Array ? bytes : Array.isArray(bytes) ? Uint8Array.from(bytes) : null
+      const rawName = typeof defaultName === 'string' && defaultName.trim() ? defaultName.trim() : 'export.xlsx'
+      const safeName = rawName.replace(/[/\\?%*:|"<>]/g, '_')
+      const defaultPath = safeName.toLowerCase().endsWith('.xlsx') ? safeName : `${safeName}.xlsx`
+      if (!data || data.length < 4 || data[0] !== 80 || data[1] !== 75) {
+        throw new Error('ข้อมูล Excel ไม่ถูกต้อง')
+      }
+      const result = await dialog.showSaveDialog(target, {
+        title: 'ส่งออก Excel',
+        defaultPath,
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+      })
+      if (result.canceled || !result.filePath) return false
+      await writeFile(result.filePath, data)
+      return true
+    })
     ipcMain.handle('files:list', (event) => {
       authorizedWindow(event)
       return listStandardFiles(db!)
@@ -265,9 +285,10 @@ if (!app.requestSingleInstanceLock()) {
       const zip = String(zipName ?? '')
       return checkObservations(db!, zip, reporter(target, 'observations', zip))
     })
-    ipcMain.handle('observations:rows', (event, zipName: unknown, rule: unknown) => {
+    ipcMain.handle('observations:rows', (event, zipName: unknown, rule: unknown, limit: unknown) => {
       authorizedWindow(event)
-      return observationRows(db!, String(zipName ?? ''), String(rule ?? ''))
+      const numLimit = typeof limit === 'number' ? limit : 100
+      return observationRows(db!, String(zipName ?? ''), String(rule ?? ''), numLimit)
     })
     ipcMain.handle('observations:rules', (event) => {
       authorizedWindow(event)
@@ -281,11 +302,12 @@ if (!app.requestSingleInstanceLock()) {
       authorizedWindow(event)
       return structureResult(db!, String(zipName ?? ''))
     })
-    ipcMain.handle('structure:failing-rows', (event, zipName: unknown, tableName: unknown, columnName: unknown, rule: unknown) => {
+    ipcMain.handle('structure:failing-rows', (event, zipName: unknown, tableName: unknown, columnName: unknown, rule: unknown, limit: unknown) => {
       authorizedWindow(event)
       // No rule means every rule of that field; each record still names the one it broke.
       return structureFailingRows(db!, String(zipName ?? ''), String(tableName ?? ''), String(columnName ?? ''),
-        rule === undefined || rule === null ? '' : String(rule))
+        rule === undefined || rule === null ? '' : String(rule),
+        typeof limit === 'number' ? limit : 100)
     })
     ipcMain.handle('reference:codes', (event, table: unknown) => {
       authorizedWindow(event)
@@ -334,6 +356,14 @@ if (!app.requestSingleInstanceLock()) {
       return { runId, files, rowCount }
       } finally { activeImports -= 1 }
     })
+    ipcMain.handle('d506:report', (event, year: unknown) => {
+      authorizedWindow(event)
+      return getD506Report(db!, Number(year) || 2569)
+    })
+    ipcMain.handle('revenue:report', (event, month: unknown) => {
+      authorizedWindow(event)
+      return getRevenueReport(db!, String(month || ''))
+    })
     createWindow(() => splash.close())
     void sso.restore()
     updater.start()
@@ -357,6 +387,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('indicators:process')
     ipcMain.removeHandler('messaging:villages')
     ipcMain.removeHandler('indicators:save-workbook')
+    ipcMain.removeHandler('files:save-excel')
     ipcMain.removeHandler('database:status')
     ipcMain.removeHandler('hospital:find')
     ipcMain.removeHandler('import:choose-file')
@@ -375,6 +406,8 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.removeHandler('import:log')
     ipcMain.removeHandler('import:check-file')
     ipcMain.removeHandler('import:run')
+    ipcMain.removeHandler('d506:report')
+    ipcMain.removeHandler('revenue:report')
     void Promise.resolve(api?.close()).catch(console.error)
       .then(() => db!.close()).catch(console.error).finally(() => app.exit())
   })

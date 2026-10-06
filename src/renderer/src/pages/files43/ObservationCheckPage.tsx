@@ -5,6 +5,20 @@ import { Icon } from '../../Icon'
 
 const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 
+function downloadBlobFile(fileName: string, bytes: Uint8Array) {
+  const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => {
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, 100)
+}
+
 export function ObservationCheckPage() {
   const [log, setLog] = useState<ImportLogEntry[]>([])
   const [result, setResult] = useState<ObservationResult | null>(null)
@@ -12,7 +26,10 @@ export function ObservationCheckPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [details, setDetails] = useState<FailingRows | null>(null)
+  const [selectedRule, setSelectedRule] = useState<ObservationRuleId | ''>('')
   const [loadingRows, setLoadingRows] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const [rules, setRules] = useState<ObservationRule[]>([])
   // The zip waiting on the picker, and the ticks the user has made but not confirmed yet.
   const [picking, setPicking] = useState('')
@@ -52,6 +69,7 @@ export function ObservationCheckPage() {
     setError('')
     setResult(null)
     setDetails(null)
+    setExportError('')
     try {
       // The ticks are the register's own switches, so confirming keeps them for the next run too.
       for (const rule of chosen) await window.api.setObservationRuleActive(rule.id, picked[rule.id])
@@ -63,11 +81,64 @@ export function ObservationCheckPage() {
   }
   async function showRows(rule: ObservationRuleId) {
     if (!result) return
+    setSelectedRule(rule)
     setLoadingRows(true)
     setError('')
+    setExportError('')
     try { setDetails(await window.api.observationRows(result.zipName, rule)) }
     catch (reason: unknown) { setError(String(reason)) }
     finally { setLoadingRows(false) }
+  }
+
+  async function exportDetailsExcel() {
+    if (!result || !details || !details.rows.length) return
+    setExporting(true)
+    setExportError('')
+    try {
+      let exportRows = details.rows
+      if (details.total > details.rows.length && selectedRule) {
+        try {
+          const allDetails = await window.api.observationRows(result.zipName, selectedRule, 0)
+          if (allDetails?.rows?.length) {
+            exportRows = allDetails.rows
+          }
+        } catch {
+          exportRows = details.rows
+        }
+      }
+
+      const XLSX = await import('xlsx')
+      const book = XLSX.utils.book_new()
+      const header = details.columns.map((col) => col.toUpperCase())
+      const sheet = XLSX.utils.aoa_to_sheet([header, ...exportRows])
+      const sheetName = `ข้อสังเกต_${details.tableName.toUpperCase()}`.slice(0, 31)
+      XLSX.utils.book_append_sheet(book, sheet, sheetName)
+
+      const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
+      const baseZip = result.zipName.replace(/\.zip$/i, '')
+      const safeRule = (selectedRule || details.tableName).toUpperCase()
+      const fileName = `ข้อสังเกต_${details.tableName.toUpperCase()}_${safeRule}_${baseZip}.xlsx`
+
+      if (typeof window.api?.saveExcelFile === 'function') {
+        try {
+          await window.api.saveExcelFile(fileName, bytes)
+        } catch (err: unknown) {
+          const msg = String(err)
+          if (msg.includes('No handler registered')) {
+            downloadBlobFile(fileName, bytes)
+          } else {
+            throw err
+          }
+        }
+      } else {
+        downloadBlobFile(fileName, bytes)
+      }
+    } catch (reason: unknown) {
+      const msg = reason instanceof Error ? reason.message : String(reason)
+      setExportError(msg)
+    } finally {
+      setExporting(false)
+    }
   }
 
   return <>
@@ -138,11 +209,28 @@ export function ObservationCheckPage() {
           onClick={() => void check()}>เริ่มตรวจสอบ</button>
       </div>
     </dialog>
-    <dialog className="large-modal" ref={dialog} onClose={() => setDetails(null)} aria-label="รายละเอียดข้อสังเกต">
+    <dialog className="large-modal" ref={dialog} onClose={() => { setDetails(null); setExportError('') }} aria-label="รายละเอียดข้อสังเกต">
       {details && <>
-        <header><div><strong>{details.detail}</strong><small>แสดง {details.rows.length.toLocaleString('en-US')} จาก {details.total.toLocaleString('en-US')} แถว</small></div>
-          <button type="button" className="modal-close" aria-label="ปิด" onClick={() => setDetails(null)}><Icon name="close" size={16} /></button>
+        <header>
+          <div>
+            <strong>{details.detail}</strong>
+            <small>แฟ้ม {details.tableName.toUpperCase()} · แสดง {details.rows.length.toLocaleString('en-US')} จาก {details.total.toLocaleString('en-US')} แถว</small>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button type="button" className="mock-button" disabled={exporting || !details.rows.length}
+              onClick={() => void exportDetailsExcel()}
+              title={`Export ข้อมูลแถวที่พบข้อสังเกตของ ${details.tableName.toUpperCase()} เป็น Excel`}>
+              <Icon name="excel" size={16} />
+              {exporting ? 'กำลัง Export...' : 'Export Excel'}
+            </button>
+            <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => { setDetails(null); setExportError('') }}>
+              <Icon name="close" size={16} />
+            </button>
+          </div>
         </header>
+        {exportError && <div style={{ padding: '8px 18px', background: '#fce8e8', color: '#a83030', fontSize: '11px', borderBottom: '1px solid var(--line)' }} role="alert">
+          {exportError}
+        </div>}
         <div className="table-wrapper">
           <SortableTable className="data-table" aria-label="แถวที่พบข้อสังเกต">
             <thead><tr>{details.columns.map((column) => <th key={column}>{column.toUpperCase()}</th>)}</tr></thead>

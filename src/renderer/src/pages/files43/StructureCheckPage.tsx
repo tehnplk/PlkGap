@@ -7,6 +7,42 @@ import { Icon } from '../../Icon'
 const when = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 const megabytes = (bytes: number) => (bytes / 1048576).toFixed(2)
 
+function splitDescriptionLines(text: string): string[] {
+  if (!text) return []
+  if (text.includes('\n')) {
+    return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  }
+  const lines = text
+    .split(/(?:,\s*|\s+)(?=(?:\d{1,2}\s*=|หมายเหตุ\s*:))/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return lines.length > 0 ? lines : [text]
+}
+
+function shouldFormatMultiline(desc: string, columnName: string): boolean {
+  if (columnName.toLowerCase() === 'typearea') return true
+  if (!desc) return false
+  if (desc.includes('\n')) return true
+  const lines = splitDescriptionLines(desc)
+  if (lines.length <= 1) return false
+  // ข้อความยาว (เกิน 100 ตัวอักษร หรือมีข้อใดข้อหนึ่งยาวเกิน 40 ตัวอักษร) ให้แยกขึ้นบรรทัดใหม่
+  return desc.length > 100 || lines.some((l) => l.length > 40)
+}
+
+function renderDescription(desc: string, columnName: string) {
+  if (!desc) return '-'
+  if (!shouldFormatMultiline(desc, columnName)) return desc
+  const lines = splitDescriptionLines(desc)
+  if (lines.length <= 1) return desc
+  return <div className="description-lines">
+    {lines.map((line, idx) => (
+      <div key={idx} className={line.startsWith('หมายเหตุ') ? 'description-note' : 'description-item'}>
+        {line}{idx < lines.length - 1 && !desc.includes('\n') ? ', ' : ''}
+      </div>
+    ))}
+  </div>
+}
+
 /** One row of the result grid: every rule that failed on the same field, counted together. */
 interface FieldSummary {
   tableName: string
@@ -50,6 +86,8 @@ export function StructureCheckPage() {
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [codesOffset, setCodesOffset] = useState({ x: 0, y: 0 })
   const [error, setError] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const failingDialog = useRef<HTMLDialogElement>(null)
   const codesDialog = useRef<HTMLDialogElement>(null)
 
@@ -128,6 +166,72 @@ export function StructureCheckPage() {
       setCodes(await window.api.referenceCodes(field.reference))
     } catch (reason: unknown) {
       setError(String(reason))
+    }
+  }
+
+function downloadBlobFile(fileName: string, bytes: Uint8Array) {
+  const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => {
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, 100)
+}
+
+  async function exportFailingExcel() {
+    if (!structure || !failing || !failing.rows.length) return
+    setExporting(true)
+    setExportError('')
+    try {
+      let exportRows = failing.rows
+      if (failing.total > failing.rows.length) {
+        try {
+          const allFailing = await window.api.failingRows(structure.zipName, failing.tableName, failing.columnName, undefined, 0)
+          if (allFailing?.rows?.length) {
+            exportRows = allFailing.rows
+          }
+        } catch {
+          // หากดึงทั้งหมดไม่สำเร็จ ให้ส่งออกแถวที่มีอยู่
+          exportRows = failing.rows
+        }
+      }
+
+      const XLSX = await import('xlsx')
+      const book = XLSX.utils.book_new()
+      const header = failing.columns.map((col) => col.toUpperCase())
+      const sheet = XLSX.utils.aoa_to_sheet([header, ...exportRows])
+      const sheetName = `${failing.tableName.toUpperCase()}_${failing.columnName.toUpperCase()}`.slice(0, 31)
+      XLSX.utils.book_append_sheet(book, sheet, sheetName)
+
+      const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
+      const baseZip = structure.zipName.replace(/\.zip$/i, '')
+      const fileName = `ไม่ผ่าน_${failing.tableName.toUpperCase()}_${failing.columnName.toUpperCase()}_${baseZip}.xlsx`
+
+      if (typeof window.api?.saveExcelFile === 'function') {
+        try {
+          await window.api.saveExcelFile(fileName, bytes)
+        } catch (err: unknown) {
+          const msg = String(err)
+          if (msg.includes('No handler registered')) {
+            downloadBlobFile(fileName, bytes)
+          } else {
+            throw err
+          }
+        }
+      } else {
+        downloadBlobFile(fileName, bytes)
+      }
+    } catch (reason: unknown) {
+      const msg = reason instanceof Error ? reason.message : String(reason)
+      setExportError(msg)
+      setError(msg)
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -213,7 +317,7 @@ export function StructureCheckPage() {
                 ? <button type="button" className="link-button" title={`ดูรหัสที่ใช้ได้จาก ${field.reference}`}
                     onClick={() => void showCodes(field)}><strong>{field.columnName.toUpperCase()}</strong></button>
                 : <strong>{field.columnName.toUpperCase()}</strong>}</td>
-              <td className="field-description">{field.fieldDescription || '-'}</td>
+              <td className="field-description" data-sort-value={field.fieldDescription || ''}>{renderDescription(field.fieldDescription, field.columnName)}</td>
               <td className="col-right num-cell">{field.tableRows.toLocaleString('en-US')}</td>
               <td className="col-right num-cell">{(field.tableRows - field.failed).toLocaleString('en-US')}</td>
               <td className="col-right num-cell">{field.tableRows ? (((field.tableRows - field.failed) / field.tableRows) * 100).toFixed(2) : '-'}</td>
@@ -264,10 +368,21 @@ export function StructureCheckPage() {
             <strong>แถวที่ไม่ผ่าน — {failing.tableName.toUpperCase()}.{failing.columnName.toUpperCase()}</strong>
             <small>{failing.detail} · แสดง {failing.rows.length.toLocaleString('en-US')} จาก {failing.total.toLocaleString('en-US')} แถว</small>
           </div>
-          <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => setFailing(null)}>
-            <Icon name="close" size={16} />
-          </button>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button type="button" className="mock-button" disabled={exporting || !failing.rows.length}
+              onClick={() => void exportFailingExcel()}
+              title={`Export ข้อมูลแถวที่ไม่ผ่านของ ${failing.tableName.toUpperCase()}.${failing.columnName.toUpperCase()} เป็น Excel`}>
+              <Icon name="excel" size={16} />
+              {exporting ? 'กำลัง Export...' : 'Export Excel'}
+            </button>
+            <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => { setFailing(null); setExportError('') }}>
+              <Icon name="close" size={16} />
+            </button>
+          </div>
         </header>
+        {exportError && <div style={{ padding: '8px 18px', background: '#fce8e8', color: '#a83030', fontSize: '11px', borderBottom: '1px solid var(--line)' }} role="alert">
+          {exportError}
+        </div>}
         <div className="table-wrapper">
           <SortableTable className="data-table" aria-label="แถวที่ไม่ผ่านเงื่อนไข">
             <thead><tr>{failing.columns.map((name) => <th key={name}>{name.toUpperCase()}</th>)}</tr></thead>
