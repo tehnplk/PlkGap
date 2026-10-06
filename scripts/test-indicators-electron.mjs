@@ -1,4 +1,4 @@
-﻿import { _electron as electron, expect } from '@playwright/test'
+import { _electron as electron, expect } from '@playwright/test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, access } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
@@ -36,7 +36,7 @@ try {
   await expect(page.getByRole('button', { name: 'สมชาย ทดสอบระบบ', exact: true })).toBeVisible()
   await page.getByRole('navigation', { name: 'Sidebar navigation' }).getByRole('button', { name: 'เทมเพลตตัวชี้วัด', exact: true }).click()
   await page.locator('#kpi-period').selectOption('2569-Q4')
-  await expect(page.getByRole('button', { name: 'ส่งออก Excel', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: /(Export Excel|ส่งออก Excel)/, exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'ประมวลผลตัวชี้วัด', exact: true }).click()
   const table = page.getByRole('table', { name: 'ตารางตัวชี้วัด', exact: true })
   await expect(table.locator('tbody tr')).toHaveCount(6)
@@ -57,7 +57,7 @@ try {
   await application.evaluate(({ dialog }, filePath) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath })
   }, output)
-  await page.getByRole('button', { name: 'ส่งออก Excel', exact: true }).click()
+  await page.getByRole('button', { name: /(Export Excel|ส่งออก Excel)/, exact: true }).click()
   await expect.poll(async () => { try { await access(output); return true } catch { return false } }).toBe(true)
   const workbook = XLSX.readFile(output)
   const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]])
@@ -65,7 +65,7 @@ try {
   await page.screenshot({ path: 'artifacts/plkgap-indicators-real-data.png', fullPage: true })
   await page.locator('#kpi-period').selectOption('2569-Q1')
   await expect(table).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'ส่งออก Excel', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: /(Export Excel|ส่งออก Excel)/, exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'ประมวลผลตัวชี้วัด', exact: true }).click()
   await expect(table.locator('tbody tr').filter({ hasText: 'KPI-01' })).toContainText('ไม่มีข้อมูลในงวด')
   assert.deepEqual(errors, [])

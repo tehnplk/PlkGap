@@ -84,7 +84,7 @@ export function RevenueTemplatePage() {
         'จัดเก็บรายได้'
       )
       const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
-      await window.api.saveIndicatorWorkbook(`Revenue-${report.month}`, bytes)
+      await window.api.saveExcelFile(`Revenue-${report.month}`, bytes)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     }
@@ -138,7 +138,8 @@ export function RevenueTemplatePage() {
           disabled={!hasData || loading}
           onClick={() => void exportExcel()}
         >
-          ส่งออก Excel
+          <Icon name="excel" size={15} />
+          Export Excel
         </button>
       </div>
 

@@ -108,7 +108,7 @@ export function D506Page() {
         `10อันดับ506_ปี${year}`
       )
       const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
-      await window.api.saveIndicatorWorkbook(`10อันดับโรคระบาด506_ปีงบ_${year}`, bytes)
+      await window.api.saveExcelFile(`10อันดับโรคระบาด506_ปีงบ_${year}`, bytes)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     }
@@ -146,8 +146,8 @@ export function D506Page() {
       </button>
 
       <button type="button" className="mock-button" disabled={!displayItems.length} onClick={() => void exportExcel()}>
-        <Icon name="list" size={15} />
-        ส่งออก Excel
+        <Icon name="excel" size={15} />
+        Export Excel
       </button>
 
       {!hasRealData && (

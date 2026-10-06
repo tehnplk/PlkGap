@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Icon } from './Icon'
 import { UpdateControl } from './UpdateControl'
+import appIcon from './assets/app-icon.png'
 
 export function TitleBar({ children }: { children: ReactNode }) {
   const [maximized, setMaximized] = useState(false)
@@ -12,7 +13,7 @@ export function TitleBar({ children }: { children: ReactNode }) {
   }, [])
 
   return <header className="main-titlebar" aria-label="Application title bar">
-    <span className="main-app-icon"><Icon name="grid" size={14} /></span>
+    <span className="main-app-icon"><img src={appIcon} alt="PLKGap" width={16} height={16} style={{ borderRadius: '3px', display: 'block' }} /></span>
     {children}
     <span className="main-title">PLK GAP{' '}<span className="main-version">version {__APP_VERSION__}</span></span>
     <UpdateControl />

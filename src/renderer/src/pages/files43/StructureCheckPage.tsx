@@ -37,7 +37,7 @@ function renderDescription(desc: string, columnName: string) {
   return <div className="description-lines">
     {lines.map((line, idx) => (
       <div key={idx} className={line.startsWith('หมายเหตุ') ? 'description-note' : 'description-item'}>
-        {line}
+        {line}{idx < lines.length - 1 && !desc.includes('\n') ? ', ' : ''}
       </div>
     ))}
   </div>
@@ -86,6 +86,8 @@ export function StructureCheckPage() {
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [codesOffset, setCodesOffset] = useState({ x: 0, y: 0 })
   const [error, setError] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const failingDialog = useRef<HTMLDialogElement>(null)
   const codesDialog = useRef<HTMLDialogElement>(null)
 
@@ -164,6 +166,72 @@ export function StructureCheckPage() {
       setCodes(await window.api.referenceCodes(field.reference))
     } catch (reason: unknown) {
       setError(String(reason))
+    }
+  }
+
+function downloadBlobFile(fileName: string, bytes: Uint8Array) {
+  const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => {
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, 100)
+}
+
+  async function exportFailingExcel() {
+    if (!structure || !failing || !failing.rows.length) return
+    setExporting(true)
+    setExportError('')
+    try {
+      let exportRows = failing.rows
+      if (failing.total > failing.rows.length) {
+        try {
+          const allFailing = await window.api.failingRows(structure.zipName, failing.tableName, failing.columnName, undefined, 0)
+          if (allFailing?.rows?.length) {
+            exportRows = allFailing.rows
+          }
+        } catch {
+          // หากดึงทั้งหมดไม่สำเร็จ ให้ส่งออกแถวที่มีอยู่
+          exportRows = failing.rows
+        }
+      }
+
+      const XLSX = await import('xlsx')
+      const book = XLSX.utils.book_new()
+      const header = failing.columns.map((col) => col.toUpperCase())
+      const sheet = XLSX.utils.aoa_to_sheet([header, ...exportRows])
+      const sheetName = `${failing.tableName.toUpperCase()}_${failing.columnName.toUpperCase()}`.slice(0, 31)
+      XLSX.utils.book_append_sheet(book, sheet, sheetName)
+
+      const bytes = new Uint8Array(XLSX.write(book, { type: 'array', bookType: 'xlsx' }))
+      const baseZip = structure.zipName.replace(/\.zip$/i, '')
+      const fileName = `ไม่ผ่าน_${failing.tableName.toUpperCase()}_${failing.columnName.toUpperCase()}_${baseZip}.xlsx`
+
+      if (typeof window.api?.saveExcelFile === 'function') {
+        try {
+          await window.api.saveExcelFile(fileName, bytes)
+        } catch (err: unknown) {
+          const msg = String(err)
+          if (msg.includes('No handler registered')) {
+            downloadBlobFile(fileName, bytes)
+          } else {
+            throw err
+          }
+        }
+      } else {
+        downloadBlobFile(fileName, bytes)
+      }
+    } catch (reason: unknown) {
+      const msg = reason instanceof Error ? reason.message : String(reason)
+      setExportError(msg)
+      setError(msg)
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -300,10 +368,21 @@ export function StructureCheckPage() {
             <strong>แถวที่ไม่ผ่าน — {failing.tableName.toUpperCase()}.{failing.columnName.toUpperCase()}</strong>
             <small>{failing.detail} · แสดง {failing.rows.length.toLocaleString('en-US')} จาก {failing.total.toLocaleString('en-US')} แถว</small>
           </div>
-          <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => setFailing(null)}>
-            <Icon name="close" size={16} />
-          </button>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button type="button" className="mock-button" disabled={exporting || !failing.rows.length}
+              onClick={() => void exportFailingExcel()}
+              title={`Export ข้อมูลแถวที่ไม่ผ่านของ ${failing.tableName.toUpperCase()}.${failing.columnName.toUpperCase()} เป็น Excel`}>
+              <Icon name="excel" size={16} />
+              {exporting ? 'กำลัง Export...' : 'Export Excel'}
+            </button>
+            <button type="button" className="modal-close" aria-label="ปิด" title="ปิด" onClick={() => { setFailing(null); setExportError('') }}>
+              <Icon name="close" size={16} />
+            </button>
+          </div>
         </header>
+        {exportError && <div style={{ padding: '8px 18px', background: '#fce8e8', color: '#a83030', fontSize: '11px', borderBottom: '1px solid var(--line)' }} role="alert">
+          {exportError}
+        </div>}
         <div className="table-wrapper">
           <SortableTable className="data-table" aria-label="แถวที่ไม่ผ่านเงื่อนไข">
             <thead><tr>{failing.columns.map((name) => <th key={name}>{name.toUpperCase()}</th>)}</tr></thead>
